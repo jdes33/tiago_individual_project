@@ -21,8 +21,8 @@ int main (int argc, char **argv)
   move_base_msgs::MoveBaseGoal goal;
   goal.target_pose.header.frame_id = "map";
   goal.target_pose.header.stamp = ros::Time::now();
-  goal.target_pose.pose.position.x = 1.15;
-  goal.target_pose.pose.position.y = -0.67;
+  goal.target_pose.pose.position.x = 1.53126275539;
+  goal.target_pose.pose.position.y = 4.52530193329;
 
   goal.target_pose.pose.orientation.z = -0.51;
   goal.target_pose.pose.orientation.w = 0.85;

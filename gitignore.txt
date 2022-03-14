@@ -1,0 +1,12 @@
+.rosinstall
+.rosinstall.bak
+custom_worlds
+darknet_ros
+darnet_test
+dope
+find-object
+geometric_shapes
+haf_grasping
+moveit_msgs
+rviz_visual_tools
+usb_cam
