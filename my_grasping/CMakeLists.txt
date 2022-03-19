@@ -13,6 +13,8 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   message_generation
   sensor_msgs
+  pcl_conversions
+  pcl_ros
 )
 
 ## System dependencies are found with CMake's conventions
@@ -58,6 +60,7 @@ add_message_files(
 add_service_files(
   FILES
   AddTwoInts.srv
+  GetObjectClouds.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -71,6 +74,7 @@ add_service_files(
 generate_messages(
   DEPENDENCIES
   std_msgs
+  sensor_msgs
 )
 
 ################################################
@@ -105,7 +109,7 @@ generate_messages(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES my_grasping
-  CATKIN_DEPENDS roscpp rospy std_msgs message_runtime
+  CATKIN_DEPENDS roscpp rospy std_msgs message_runtime sensor_msgs
 #  DEPENDS system_lib
 )
 
