@@ -15,6 +15,9 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   pcl_conversions
   pcl_ros
+  pcl_msgs
+  tf
+  tf_conversions
 )
 
 ## System dependencies are found with CMake's conventions
@@ -61,6 +64,7 @@ add_service_files(
   FILES
   AddTwoInts.srv
   GetObjectClouds.srv
+  GetTargetPose.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -75,6 +79,7 @@ generate_messages(
   DEPENDENCIES
   std_msgs
   sensor_msgs
+  geometry_msgs
 )
 
 ################################################
@@ -212,3 +217,6 @@ include_directories(
 add_executable(object_clouds_server src/object_clouds_server.cpp)
 target_link_libraries(object_clouds_server ${catkin_LIBRARIES})
 add_dependencies(object_clouds_server my_grasping_gencpp)
+
+add_executable(perception_node src/perception_node.cpp)
+target_link_libraries(perception_node ${catkin_LIBRARIES})
