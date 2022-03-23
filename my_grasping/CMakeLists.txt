@@ -220,3 +220,4 @@ add_dependencies(object_clouds_server my_grasping_gencpp)
 
 add_executable(perception_node src/perception_node.cpp)
 target_link_libraries(perception_node ${catkin_LIBRARIES})
+add_dependencies(perception_node my_grasping_gencpp)

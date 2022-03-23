@@ -4,7 +4,7 @@
   <arg name="world"  default="empty"/>  <!-- empty, ... (see ../worlds) -->
   <!--deprecated argument, you should specify the parameters below-->
   <!-- They are described in tiago.urdf.xacro -->
-  <arg name="robot"  default="steel"/>
+  <arg name="robot"  default="titanium"/>
   <arg name="arm"  default="$(eval {'iron': False}.get(arg('robot'), True))"/>
   <arg name="end_effector"  default="$(eval {'iron': 'false', 'steel': 'pal-gripper', 'titanium': 'pal-hey5'}.get(arg('robot'), 'pal-gripper'))"/>
   <arg name="ft_sensor"  default="$(eval {'titanium': 'schunk-ft'}.get(arg('robot'), 'false'))"/>
@@ -20,11 +20,12 @@
   <arg name="extra_gazebo_args" default=""/>
   <arg name="use_moveit_camera" default="false"/>
   <arg name="use_dynamic_footprint" default="false"/>
+  <arg name="base_type" default="pmb2"/>
 
   <env name="LC_NUMERIC" value="C" />
-  <env name="GAZEBO_MODEL_PATH" value="$(find custom_worlds)/models" />
-  <env name="GAZEBO_RESOURCE_PATH" value="$(find custom_worlds)/worlds" />
-  
+  <env name="GAZEBO_MODEL_PATH" value="$(find cleanup)/models" />
+  <env name="GAZEBO_RESOURCE_PATH" value="$(find cleanup)/worlds"/>
+
   <!-- start up world -->
   <include file="$(find pal_gazebo_worlds)/launch/pal_gazebo.launch">
     <arg name="world" value="$(arg world)"/>
@@ -45,6 +46,7 @@
     <arg name="camera_model" value="$(arg camera_model)"/>
     <arg name="multi" value="$(arg multi)"/>
     <arg name="gzpose" value="$(arg gzpose)"/>
+    <arg name="base_type" value="$(arg base_type)"/>
   </include>
 
   <!-- bring up robot -->
@@ -57,6 +59,7 @@
     <arg name="public_sim"  value="$(arg public_sim)"/>
     <arg name="use_moveit_camera" value="$(arg use_moveit_camera)"/>
     <arg name="use_dynamic_footprint" value="$(arg use_dynamic_footprint)"/>
+    <arg name="base_type" value="$(arg base_type)"/>
   </include>
 
   <!-- point cloud throttle and filter -->

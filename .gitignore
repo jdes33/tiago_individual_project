@@ -10,3 +10,5 @@ haf_grasping
 moveit_msgs
 rviz_visual_tools
 usb_cam
+custom_worlds
+cleanup/models
