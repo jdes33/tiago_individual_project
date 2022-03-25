@@ -12,7 +12,14 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   gazebo_ros
+  actionlib
+  actionlib_msgs
+  geometry_msgs
+  moveit_msgs
+  std_msgs
+  std_srvs
 )
+
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -205,3 +212,9 @@ include_directories(
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+
+
+catkin_install_python(PROGRAMS scripts/pick_test.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
