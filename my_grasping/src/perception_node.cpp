@@ -2,10 +2,10 @@
 #include <tf/transform_datatypes.h>
 #include <tf/transform_listener.h>
 #include <tf/transform_broadcaster.h>
-#include <sensor_msgs/PointCloud2.h>  //hydro
+#include <sensor_msgs/PointCloud2.h>  
 
 // PCL specific includes
-#include <pcl_conversions/pcl_conversions.h>  //hydro
+#include <pcl_conversions/pcl_conversions.h> 
 #include "pcl_ros/transforms.h"
 
 #include <pcl/filters/voxel_grid.h>
@@ -32,6 +32,12 @@
 #include <geometry_msgs/Point.h>
 // Needed for ROS Service
 #include <my_grasping/GetTargetPose.h>
+
+// Needed to save as pcd file
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
+
+
 
 class PerceptionPipeline
 {
@@ -312,6 +318,9 @@ public:
 
       object_pub_.publish(*pc2_cloud);
     }
+
+pcl::io::savePCDFileASCII ("/home/jason/tiago_public_ws/src/jason_pkgs/cleanup/data/object/detected_object.pcd", *sor_cloud_filtered);
+ROS_INFO_STREAM("Saved " << sor_cloud_filtered->size() << " data points to data/object/detected_object.pcd");
 
     /* ========================================
      * Fill Code: PLANE SEGEMENTATION OF PICK SURFACE - FIND TOP OF BOX

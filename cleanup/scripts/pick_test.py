@@ -59,6 +59,31 @@ if __name__=='__main__':
     print right_gripper.get_named_targets()
     rospy.sleep(1)
 
+    rospy.loginfo("Setting publishers to torso and head controller...")
+    torso_cmd = rospy.Publisher('/torso_controller/command', JointTrajectory, queue_size=1, latch=True)
+    head_cmd = rospy.Publisher('/head_controller/command', JointTrajectory, queue_size=1, latch=True)
+    rospy.sleep(1)  # LATCHING DONT SEEM TO FIX SO I THINK JUST SLEEP FOR A BIT, MAYBE JUST MAKE LOOK DOWN MOTION OR ACTION INSTEAD
+    rospy.loginfo("Moving head down")
+    jt = JointTrajectory()
+    jt.joint_names = ['head_1_joint', 'head_2_joint']
+    jtp = JointTrajectoryPoint()
+    jtp.positions = [0.0, -0.98]
+    jtp.time_from_start = rospy.Duration(2)
+    jt.points.append(jtp)
+    head_cmd.publish(jt)
+
+    rospy.loginfo("Moving torso up/down")
+    jt = JointTrajectory()
+    jt.joint_names = ['torso_lift_joint']
+    jtp = JointTrajectoryPoint()
+    jtp.positions = [0.0] #[0.34]
+    jtp.time_from_start = rospy.Duration(2)
+    jt.points.append(jtp)
+    torso_cmd.publish(jt)
+
+    rospy.sleep(2.5)  # SLEEP TO WAIT TIL LOOK DOWN ACTION DONE
+    rospy.loginfo("Done")
+
     # clean the scene
     scene.remove_world_object("table")
     scene.remove_world_object("MApart")
@@ -66,14 +91,20 @@ if __name__=='__main__':
 
 
     # FILTER, SEGMENT AND CLUSTER TO FIND 3D OBJECT BOUNDING BOX
-    #rospy.wait_for_service('find_pick')
-    #try:
-#        pick_as = rospy.ServiceProxy('find_pick', GetTargetPose)
-#        resp1 = pick_as()#
-#        rospy.loginfo("Got target pose: " + str(resp1.target_pose))
-#    except rospy.ServiceException as e:
-#        print("Service call failed: %s"%e)
+    rospy.wait_for_service('find_pick')
+    try:
+        pick_as = rospy.ServiceProxy('find_pick', GetTargetPose)
+        resp1 = pick_as()
+        rospy.loginfo("Got target pose: " + str(resp1.target_pose))
+    except rospy.ServiceException as e:
+        print("Service call failed: %s"%e)
 
+    length = abs(resp1.max_pt.x - resp1.min_pt.x)
+    width = abs(resp1.max_pt.y - resp1.min_pt.y) # THIS NEEDS TO FIXED
+    height = abs(resp1.max_pt.z - resp1.min_pt.z)
+    print length, width, height
+    print resp1.min_pt.x, resp1.min_pt.y, resp1.min_pt.z
+    print resp1.max_pt.x, resp1.max_pt.y, resp1.max_pt.z
     #right_arm.set_named_target("home")
     #right_arm.go()
 
@@ -93,10 +124,10 @@ if __name__=='__main__':
     #scene.add_box("table", p, (0.5, 1.5, 0.48))
 
     # add an object to be grasped
-    p.pose.position.x = 0.5# 0.605
-    p.pose.position.y = 0.5# -0.12
-    p.pose.position.z = 0.5# 0.35
-    scene.add_box("MApart", p, (0.05, 0.05, 0.05))
+    p.pose.position.x = resp1.min_pt.x + length / 2.0
+    p.pose.position.y = resp1.min_pt.y + width / 2.0
+    p.pose.position.z =  resp1.target_pose.position.z / 2.0# resp1.min_pt.z + height / 2.0#
+    scene.add_box("MApart", p, (length, width, resp1.target_pose.position.z))#resp1.target_pose.position.z))
 
     rospy.sleep(1)
     rospy.loginfo("added objects")
@@ -119,7 +150,8 @@ if __name__=='__main__':
 
     #q = tf.transformations.quaternion_from_euler(math.radians(0), math.radians(0), math.radians(0))
     q = tf.transformations.quaternion_from_euler(-0.011, 1.57, 0.037)
-    grasps[0].grasp_pose.pose = Pose(Point(0.5, 0.5, 0.73), Quaternion(*q))
+    print "GOING TO", p.pose.position.x, p.pose.position.y, p.pose.position.z# + 0.23
+    grasps[0].grasp_pose.pose = Pose(Point(p.pose.position.x, p.pose.position.y, 0.24), Quaternion(*q))
     rospy.sleep(2)
 
 #      THIS IS SOMETHING THE TIAGO TUTORIALS DID, MAYBE YOU GOTTA DO IT TOO
@@ -148,8 +180,8 @@ if __name__=='__main__':
     grasps[0].pre_grasp_approach.direction.vector.x = 0.0
     grasps[0].pre_grasp_approach.direction.vector.y = 0.0
     grasps[0].pre_grasp_approach.direction.vector.z = -1.0
-    grasps[0].pre_grasp_approach.min_distance = 0.05
-    grasps[0].pre_grasp_approach.desired_distance = 0.1
+    grasps[0].pre_grasp_approach.min_distance = 0.1
+    grasps[0].pre_grasp_approach.desired_distance = 0.5
 
     # define the pre-grasp posture, this defines the trajectory position of the joints in the end effector group before we go in for the grasp
     # WE WANT TO OPEN THE GRIPPER, YOU CAN TAKE SOME OF THIS AND MAKE INTO CLOSE GRIPPER FUNCTION
@@ -157,7 +189,7 @@ if __name__=='__main__':
     pre_grasp_posture.header.frame_id = "arm_tool_link"
     pre_grasp_posture.joint_names = ["gripper_left_finger_joint", "gripper_right_finger_joint"]
     jtpoint = JointTrajectoryPoint()
-    jtpoint.positions = [0.038, 0.038]
+    jtpoint.positions = [0.04, 0.04]
     jtpoint.time_from_start = rospy.Duration(2.0)
     pre_grasp_posture.points.append(jtpoint)
     grasps[0].pre_grasp_posture = pre_grasp_posture
@@ -167,8 +199,11 @@ if __name__=='__main__':
     grasp_posture = copy.deepcopy(pre_grasp_posture)
     grasp_posture.points[0].time_from_start = rospy.Duration(2.0 + 1.0)
     jtpoint2 = JointTrajectoryPoint()
-    jtpoint2.positions = [0.015, 0.015]
+    finger_dist = (length/2.0) - 0.008
+    jtpoint2.positions = [finger_dist, finger_dist]
     jtpoint2.time_from_start = rospy.Duration(2.0 + 1.0 + 3.0)
+    jtpoint2.effort.append(1.0)
+    jtpoint2.effort.append(1.0)
     grasp_posture.points.append(jtpoint2)
     grasps[0].grasp_posture = grasp_posture
 
@@ -186,16 +221,28 @@ if __name__=='__main__':
     #grasps[0].allowed_touch_objects = ["table", "MApart"]  # THIS LEFT EMPTY ON THINGY
     #grasps[0].links_to_allow_contact = ["gripper_left_finger_link", "gripper_right_finger_link", "gripper_link"]
     #Don't restrict contact force
-    #grasps[0].max_contact_force = 0.0
+    grasps[0].max_contact_force = 0
     print "max contact force", grasps[0].max_contact_force
 
     # append the grasp to the list of grasps
     ##grasps.append(g)
 
-    rospy.sleep(2)
+    #rospy.sleep(2)
 
     # pick the object
     right_arm.pick("MApart", grasps)
+
+
+    rospy.loginfo("Moving head back up")
+    jt = JointTrajectory()
+    jt.joint_names = ['head_1_joint', 'head_2_joint']
+    jtp = JointTrajectoryPoint()
+    jtp.positions = [0.0, 0.0]
+    jtp.time_from_start = rospy.Duration(2.0)
+    jt.points.append(jtp)
+    head_cmd.publish(jt)
+    rospy.sleep(2.5)  # SLEEP TO WAIT TIL LOOK DOWN ACTION DONE
+    rospy.loginfo("Done")
 
     rospy.spin()
     roscpp_shutdown()
@@ -230,7 +277,16 @@ if __name__ == "__main__" and False:
     rospy.loginfo("Setting publishers to torso and head controller...")
     torso_cmd = rospy.Publisher('/torso_controller/command', JointTrajectory, queue_size=1)
     head_cmd = rospy.Publisher('/head_controller/command', JointTrajectory, queue_size=1)
-    rospy.loginfo("movoing to next stage...")
+
+    rospy.loginfo("Moving head down")
+    jt = JointTrajectory()
+    jt.joint_names = ['head_2_joint']
+    jtp = JointTrajectoryPoint()
+    jtp.positions = [0.98]
+    jtp.time_from_start = rospy.Duration(2.0)
+    jt.points.append(jtp)
+    self.head_cmd.publish(jt)
+    rospy.loginfo("Done moving head down.")
 
     # FILTER, SEGMENT AND CLUSTER TO FIND OBJECT CENTROID
     rospy.wait_for_service('find_pick')
