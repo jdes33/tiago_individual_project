@@ -18,6 +18,8 @@ find_package(catkin REQUIRED COMPONENTS
   moveit_msgs
   std_msgs
   std_srvs
+  pcl_conversions
+  pcl_ros
 )
 
 

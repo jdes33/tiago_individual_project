@@ -18,6 +18,8 @@ find_package(catkin REQUIRED COMPONENTS
   pcl_msgs
   tf
   tf_conversions
+haf_grasping
+actionlib
 )
 
 ## System dependencies are found with CMake's conventions

@@ -10,7 +10,7 @@
       cloud_topic3: "/xtion/depth_registered/points"
       world_frame: "base_footprint"
       camera_frame: "xtion_depth_frame"
-      voxel_leaf_size: 0.004 <!-- mm -->
+      voxel_leaf_size: 0.004 <!--0.004--> <!-- mm -->
       y_filter_min: -1 <!-- m -->
       y_filter_max:  1 <!-- m -->
       x_filter_min: -2 <!-- m -->

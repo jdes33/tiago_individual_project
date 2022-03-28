@@ -38,7 +38,6 @@
 #include <pcl/point_types.h>
 
 
-
 class PerceptionPipeline
 {
 public:
@@ -396,7 +395,6 @@ ROS_INFO_STREAM("Saved " << sor_cloud_filtered->size() << " data points to data/
     part_pose.orientation.y = 0;
     part_pose.orientation.z = 0;
     part_pose.orientation.w = 1;
-
     /* ========================================
      * FIND BOUNDING BOX
      * ========================================*/
@@ -425,8 +423,11 @@ ROS_INFO_STREAM("Saved " << sor_cloud_filtered->size() << " data points to data/
       br_.sendTransform(tf::StampedTransform(part_transform, ros::Time::now(), world_frame, "part"));
     }
 
+	
+
     return true;
   }
+
 
 private:
   ros::ServiceServer server_;
