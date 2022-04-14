@@ -35,6 +35,7 @@
 <node name="rviz" pkg="rviz" type="rviz" if="$(arg rviz)" args="-d $(find cleanup)/config/rviz/cleanup_rviz.rviz"/>
 
   <include file="$(find my_grasping)/launch/processing_node.launch"/>
+  <include file="$(find pcd_proc)/launch/pcd_proc.launch"/>
   <include file="$(find cleanup)/launch/haf_grasping.launch"/>
 
 

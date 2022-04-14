@@ -1,0 +1,4 @@
+sensor_msgs/PointCloud2 pointcloud
+geometry_msgs/Pose top_center_pose
+geometry_msgs/Point min_pt
+geometry_msgs/Point max_pt

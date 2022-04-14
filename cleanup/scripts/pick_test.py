@@ -117,7 +117,7 @@ if __name__=='__main__':
     jt.points.append(jtp)
     torso_cmd.publish(jt)
 
-    rospy.sleep(2.5)  # SLEEP TO WAIT TIL LOOK DOWN ACTION DONE
+    rospy.sleep(3.0)  # SLEEP TO WAIT TIL LOOK DOWN ACTION DONE
     rospy.loginfo("Done")
 
     # clean the scene
@@ -177,6 +177,14 @@ if __name__=='__main__':
     p.pose.position.z =  resp1.target_pose.position.z / 2.0# resp1.min_pt.z + height / 2.0#
     scene.add_box("MApart", p, (length, width, resp1.target_pose.position.z))#resp1.target_pose.position.z))
 
+
+    # THIS IS FOR TEST:
+    # ADD A MESH FROM YCB:
+    #p.pose.position.x = 1.0
+    #p.pose.position.y = 0.0
+    #p.pose.position.z = 1.0
+    #scene.add_mesh("screwdriver", p, "/home/jason/Desktop/ycb_models/ycb-tools/models/ycb/043_phillips_screwdriver/google_16k/nontextured.stl")
+
     rospy.sleep(1)
     rospy.loginfo("added objects")
 
@@ -203,7 +211,7 @@ if __name__=='__main__':
     else:
         print "Using haf grasp"
         grasps[0].grasp_pose.pose.position.x, grasps[0].grasp_pose.pose.position.y, grasps[0].grasp_pose.pose.position.z = current_haf_grasp["gcp"]
-        grasps[0].grasp_pose.pose.position.z = 0.23  ## this will make almost touch floor # this will make tip of gripper align with position
+        grasps[0].grasp_pose.pose.position.z = 0.23#0.23  ## this will make almost touch floor # this will make tip of gripper align with position
         q = tf.transformations.quaternion_from_euler(0, 1.57, -math.radians(current_haf_grasp["roll"]))
         grasps[0].grasp_pose.pose.orientation = Quaternion(*q)
         print "hey"
@@ -237,13 +245,16 @@ if __name__=='__main__':
     grasp_posture = copy.deepcopy(pre_grasp_posture)
     grasp_posture.points[0].time_from_start = rospy.Duration(2.0 + 1.0)
     jtpoint2 = JointTrajectoryPoint()
-    #dist = sum([(current_haf_grasp["gp1"][i] - current_haf_grasp["gp2"][i])**2 for i in range(3)]) ** 0.5
-    ##print "finger dist = ", str(dist)
-    #finger_dist = dist/2.0 # 0.004#0.003
+    dist = sum([(current_haf_grasp["gp1"][i] - current_haf_grasp["gp2"][i])**2 for i in range(3)]) ** 0.5
+
+    finger_dist = (dist * 0.8)/2.0 # 0.004#0.003
+    finger_dist = 0.0
+    print "finger dist = ", str(finger_dist)
+
     jtpoint2.positions = [finger_dist, finger_dist]
     jtpoint2.time_from_start = rospy.Duration(2.0 + 1.0 + 3.0)
-    jtpoint2.effort.append(1.0)
-    jtpoint2.effort.append(1.0)
+    #jtpoint2.effort.append(1.0)
+    #jtpoint2.effort.append(1.0)
     grasp_posture.points.append(jtpoint2)
     grasps[0].grasp_posture = grasp_posture
 
@@ -259,7 +270,7 @@ if __name__=='__main__':
     #grasps[0].allowed_touch_objects = ["table", "MApart"]  # THIS LEFT EMPTY ON THINGY
     #grasps[0].links_to_allow_contact = ["gripper_left_finger_link", "gripper_right_finger_link", "gripper_link"]
     #Don't restrict contact force
-    grasps[0].max_contact_force = 0
+    grasps[0].max_contact_force = 0.0
     print "max contact force", grasps[0].max_contact_force
 
     # pick the object
@@ -276,6 +287,13 @@ if __name__=='__main__':
     head_cmd.publish(jt)
     rospy.sleep(2.5)  # SLEEP TO WAIT TIL LOOK DOWN ACTION DONE
     rospy.loginfo("Done")
+
+    rospy.loginfo("MOVING TO HOME POSITION, HOPEFULLY WITH OBJECT")
+    goal = PlayMotionGoal()
+    goal.motion_name = 'home'
+    goal.skip_planning = True
+    client.send_goal(goal)
+    client.wait_for_result(rospy.Duration(10.0))
 
     rospy.spin()
     roscpp_shutdown()

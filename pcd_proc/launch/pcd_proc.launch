@@ -1,0 +1,28 @@
+<?xml version="1.0" ?>
+<launch>
+  <arg name="cloud_debug" default="true"/>
+  <param name="cloud_debug" value="$(arg cloud_debug)"/>
+
+  <node name="pcd_processing_node" pkg="pcd_proc" type="pcd_proc_node" output="screen">
+    <rosparam>
+      cloud_topic1: "/xtion/depth_registered/points"
+      cloud_topic2: "/xtion/depth_registered/points"
+      cloud_topic3: "/xtion/depth_registered/points"
+      world_frame: "base_footprint"
+      camera_frame: "xtion_rgb_optical_frame"  <!-- obtained using rostopic echo /xtion/depth_registered/points | grep head -n7 -->
+      voxel_leaf_size: 0.004 <!--0.004--> <!-- mm -->
+      y_filter_min: -1 <!-- m -->
+      y_filter_max:  1 <!-- m -->
+      x_filter_min: -1 <!-- m -->
+      x_filter_max:  1 <!-- m -->
+      <!-- Add .781  for the top of the table-->
+      z_filter_min:  0 <!-- m -->
+      z_filter_max:  2.031 <!-- m -->
+      plane_max_iterations: 100
+      plane_distance_threshold: 0.003 <!-- points this distance away from plane model are still considered part of plane -->
+      cluster_tolerance: 0.01
+      cluster_min_size: 250
+      cluster_max_size: 500000
+    </rosparam>
+  </node>
+</launch>
