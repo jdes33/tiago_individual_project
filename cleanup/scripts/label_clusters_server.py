@@ -1,8 +1,21 @@
 #!/usr/bin/env python
 import rospy
-from std_msgs.msg import Int64
-from std_srvs.srv import SetBool
 
+from haf_grasping.srv import GraspSearchCenter
+from yolo4.srv import DetectObjects
+from pcd_proc.srv import GetClusters
+
+#from sensor_msgs.msg import PointCloud2
+from sensor_msgs import point_cloud2
+
+# for 3d point to pixel
+from image_geometry import PinholeCameraModel
+from sensor_msgs.msg import Image, CameraInfo
+
+
+import tf2_ros
+from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
+import tf2_py as tf2
 
 ##
 #
@@ -14,57 +27,100 @@ from std_srvs.srv import SetBool
 #
 #
 
-class NumberCounter:
-    def __init__(self):
-        self.counter = 0
-        self.pub = rospy.Publisher("/number_count", Int64, queue_size=10)
-        self.number_subscriber = rospy.Subscriber("/number", Int64, self.callback_number)
-        self.reset_service = rospy.Service("/reset_counter", SetBool, self.callback_reset_counter)
-    def callback_number(self, msg):
-        self.counter += msg.data
-        new_msg = Int64()
-        new_msg.data = self.counter
-        self.pub.publish(new_msg)
-    def callback_reset_counter(self, req):
-        if req.data:
-            self.counter = 0
-            return True, "Counter has been successfully reset"
-        return False, "Counter has not been reset"
-if __name__ == '__main__':
-    rospy.init_node('number_counter')
 
+if __name__ == '__main__':
+
+
+
+
+    rospy.init_node('label_clusters_server')
+    tf_buffer = tf2_ros.Buffer()
+    # NOTE: this must be created some time before you use it or you could get frame not exist warning
+    # source for NOTE: https://answers.ros.org/question/192570/tftransformlistenertransformpose-exception-target_frame-does-not-exist/
+    listener = tf2_ros.TransformListener(tf_buffer)
+    print("hey 1")
     # call cluster service to get clusters
     rospy.wait_for_service('/get_clusters')
     try:
         get_clusters_service = rospy.ServiceProxy('/get_clusters', GetClusters)
         ##p = Point(resp1.target_pose.position)
-        clusters = get_clusters_service()
+        get_clusters_response = get_clusters_service()
+        print "Got ", len(get_clusters_response.clusters)
 
-        if clusters:
+        if get_clusters_response:
             rospy.loginfo("obtained clusters")
     except rospy.ServiceException as e:
         print("GetClusters service call failed: %s"%e)
 
-    # call yolo service to get boxes
-        #ros::ServiceClient client = nh_.serviceClient<yolo4::DetectObjects>("/yolo_server/detect_objects");
 
+
+    print("hey 2")
+
+    # call yolo service to get boxes
     rospy.wait_for_service('/yolo_server/detect_objects')
     try:
+        print("hey 2.1")
         get_detections_service = rospy.ServiceProxy('/yolo_server/detect_objects', DetectObjects)
         ##p = Point(resp1.target_pose.position)
-        detections = get_detections_service()
+        print("hey 2.2")
 
-        if detections:
+        get_detections_response = get_detections_service()
+
+        if get_detections_response:
             rospy.loginfo("obtained yolo detections")
+            print "Got ", len(get_detections_response.detections)
+            print("hey 2.3")
+
     except rospy.ServiceException as e:
         print("DetectObjects service call failed: %s"%e)
 
 
-    ## NEED TO GO FROM CLUSTERS/POINT CLOUDS TO IMAGE POINTS
-    
 
-    NumberCounter()
-    rospy.spin()
+
+    print("hey 3")
+
+    ## NEED TO GO FROM CLUSTERS/POINT CLOUDS TO IMAGE POINTS
+    camera_info = rospy.wait_for_message("/xtion/rgb/camera_info", CameraInfo)
+    print camera_info.width
+    print camera_info.height
+
+    cam = PinholeCameraModel()
+    cam.fromCameraInfo(camera_info)
+    x,y,z = (0, 0, 1)
+
+    # convert pointclouds (which are in base_footprint) to xtion_rgb_optical_frame
+    try:
+        trans = tf_buffer.lookup_transform("xtion_rgb_optical_frame","base_footprint", rospy.Time())
+    except tf2.LookupException as ex:
+        rospy.logwarn(ex)
+    except tf2.ExtrapolationException as ex:
+        rospy.logwarn(ex)
+
+
+    transformed_pointcloud = do_transform_cloud(get_clusters_response.clusters[-1].pointcloud, trans)
+
+    pixels = set()
+
+
+    print("hey 4")
+
+    cloud_points = list(point_cloud2.read_points(transformed_pointcloud, skip_nans=True, field_names = ("x", "y", "z")))
+
+    for point in cloud_points:
+        pixels.add(cam.project3dToPixel((point[0], point[1], point[2])))
+
+    print "test point", cloud_points[-1]
+    print "number of pixels in mask/region = ", len(pixels)
+    average_x = sum([p[0] for p in pixels]) / len(pixels)
+    average_y = sum([p[1] for p in pixels]) / len(pixels)
+    print "average pixel = ", average_x, "  ", average_y
+
+    #print "converting 3d point " ,x,y,z , " to pixel:"
+    #print cam.project3dToPixel((x,y,z))
+    print cam.tfFrame()
+
+    print "DONE"
+    #rospy.spin()
 
 
 

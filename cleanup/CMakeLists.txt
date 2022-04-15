@@ -221,7 +221,7 @@ include_directories(
 catkin_install_python(PROGRAMS scripts/pick_test.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
-add_executable(label_cluster_server src/label_cluster_server.cpp)
-target_link_libraries(label_cluster_server ${catkin_LIBRARIES})
-#add_dependencies(label_cluster_server cleanup_gencpp)
+catkin_install_python(PROGRAMS scripts/label_clusters_server.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
