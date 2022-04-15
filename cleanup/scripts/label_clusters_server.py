@@ -17,6 +17,41 @@ import tf2_ros
 from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 import tf2_py as tf2
 
+from visualization_msgs.msg import MarkerArray, Marker
+
+
+def generate_text_markers(labels):
+    marker_idx = 0
+    marker_array_msg = MarkerArray()
+    for i in range(len(labels)):
+        marker = Marker()
+        marker.header.frame_id = "base_footprint" # MIGHT WANNA CHANGE TO MAP
+        marker.id = i
+        marker.type = marker.TEXT_VIEW_FACING
+        marker.action = marker.ADD
+        marker.text = labels[i][0]
+        ##marker.pose = Pose()
+        marker.pose.position.x = labels[i][1]
+        marker.pose.position.y = labels[i][2]
+        marker.pose.position.z = labels[i][3]
+        marker.pose.orientation.x = 0.0
+        marker.pose.orientation.y = 0.0
+        marker.pose.orientation.z = 0.0
+        marker.pose.orientation.w = 1.0
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0
+        marker.scale.x = 0.05
+        marker.scale.y = 0.05
+        marker.scale.z = 0.05
+        marker.lifetime = rospy.Duration(5)
+    # Set the namespace and id for this marker.  This serves to create a unique ID
+    # Any marker sent with the same namespace and id will overwrite the old one
+        marker.ns = "cluster_label"
+        marker_array_msg.markers.append(marker)
+    return marker_array_msg
+
 ##
 #
 #      FOR NOW THIS IS JUST A TEST NOT A SERVICE NOR CODE THAT MAY BE USED IN SERVICE (MIGHT NOT NEED TO GET FULL CLUSTERS HERE)
@@ -86,8 +121,6 @@ if __name__ == '__main__':
 
     cam = PinholeCameraModel()
     cam.fromCameraInfo(camera_info)
-    x,y,z = (0, 0, 1)
-
     # convert pointclouds (which are in base_footprint) to xtion_rgb_optical_frame
     try:
         trans = tf_buffer.lookup_transform("xtion_rgb_optical_frame","base_footprint", rospy.Time())
@@ -117,6 +150,71 @@ if __name__ == '__main__':
 
     #print "converting 3d point " ,x,y,z , " to pixel:"
     #print cam.project3dToPixel((x,y,z))
+
+    #labels = [["HEY", cloud_points_base_frame[-1][0], cloud_points_base_frame[-1][1], cloud_points_base_frame[-1][2]]]
+
+    print("detections: ")
+    for detection in get_detections_response.detections:
+        print detection.label
+
+    labels = []
+    for cluster in get_clusters_response.clusters:
+
+        transformed_pointcloud = do_transform_cloud(cluster.pointcloud, trans)
+        pixels = set()
+        cloud_points = list(point_cloud2.read_points(transformed_pointcloud, skip_nans=True, field_names = ("x", "y", "z")))
+        for point in cloud_points:
+            pixels.add(cam.project3dToPixel((point[0], point[1], point[2])))
+
+
+        # go through each yolo and find the one with max overlay
+        max_percentage_filled = 0
+        max_label = "unknown"
+        # MAYBE ADD A THRESHOLD TOO? i.e percentage of points in detection box
+        for detection in get_detections_response.detections:
+            current_overlap = 0
+            for pixel in pixels:
+                if pixel[0] >= detection.x and pixel[0] <= detection.x + detection.width and pixel[1] >= detection.y and pixel[1] < detection.y + detection.height:
+                    current_overlap += 1
+
+            percentage_filled = (1.0 * current_overlap) / (detection.width * detection.height)
+            if percentage_filled > max_percentage_filled:
+                max_percentage_filled = percentage_filled
+                max_label = detection.label
+        print max_label, " picked as fills ", max_percentage_filled
+
+
+        # get the cluster points, pick one and add text. CHANGE TO PICK SURFACE POSE LATER MAYBE
+        cloud_points_base_frame = list(point_cloud2.read_points(cluster.pointcloud, skip_nans=True, field_names = ("x", "y", "z")))
+        labels.append([max_label, cloud_points_base_frame[-1][0], cloud_points_base_frame[-1][1], cloud_points_base_frame[-1][2] + 0.1])
+
+
+
+
+    marker_pub = rospy.Publisher('JASONvisualization_marker', MarkerArray, queue_size=5)
+
+#    rate = rospy.Rate(1)
+    #while not rospy.is_shutdown():
+#        marker_pub.publish(generate_text_markers(labels))
+#        rate.sleep()
+
+    # publish just once: source: https://answers.ros.org/question/267199/how-can-i-publish-exactly-once-when-the-node-is-run/
+    try:
+        marker_pub = rospy.Publisher('JASONvisualization_marker', MarkerArray, queue_size=5)
+        import time
+        #time.sleep(1)
+        rate = rospy.Rate(10)  # 10hz
+        while not rospy.is_shutdown():
+            connections = marker_pub.get_num_connections()
+            rospy.loginfo('Connections: %d', connections)
+            if connections > 0:
+                marker_pub.publish(generate_text_markers(labels))
+                rospy.loginfo('Published')
+                break
+            rate.sleep()
+    except rospy.ROSInterruptException, e:
+        raise e
+
     print cam.tfFrame()
 
     print "DONE"

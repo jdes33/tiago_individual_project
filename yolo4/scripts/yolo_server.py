@@ -57,9 +57,9 @@ class Yolo4:
         cv2.imwrite("object-detection.jpg", img)
         print("saved")
 
-        cv2.imshow('Image', img)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        #cv2.imshow('Image', img)
+        #cv2.waitKey(0)
+        #cv2.destroyAllWindows()
 
         return res
 
