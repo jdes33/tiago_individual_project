@@ -224,4 +224,7 @@ catkin_install_python(PROGRAMS scripts/pick_test.py
 catkin_install_python(PROGRAMS scripts/label_clusters_server.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
+catkin_install_python(PROGRAMS scripts/cleanup.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
