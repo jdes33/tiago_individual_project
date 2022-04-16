@@ -16,8 +16,8 @@
       x_filter_min: -1 <!-- m -->
       x_filter_max:  1 <!-- m -->
       <!-- Add .781  for the top of the table-->
-      z_filter_min:  0 <!-- m -->
-      z_filter_max:  2.031 <!-- m -->
+      z_filter_min:  0.005 <!-- m -->
+      z_filter_max:  10.0 <!-- m -->
       plane_max_iterations: 100
       plane_distance_threshold: 0.003 <!-- points this distance away from plane model are still considered part of plane -->
       cluster_tolerance: 0.01

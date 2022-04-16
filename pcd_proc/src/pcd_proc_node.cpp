@@ -77,10 +77,12 @@ public:
     if (debug_)
     {
       ROS_INFO("Perception Debug Enabled: Intermediate clouds are being published");
-      cropped_pub_ = nh.advertise<sensor_msgs::PointCloud2>("cropped_cloud", 1, true);
-      object_pub_ = nh.advertise<sensor_msgs::PointCloud2>("object_cluster", 1, true);
-      cluster_pub_ = nh.advertise<sensor_msgs::PointCloud2>("primary_cluster", 1, true);
-      pick_surface_pub_ = nh.advertise<sensor_msgs::PointCloud2>("pick_surface", 1, true);
+      croppedPub_ = nh.advertise<sensor_msgs::PointCloud2>("cropped_cloud", 1, true);
+      objectPub_ = nh.advertise<sensor_msgs::PointCloud2>("object_cluster", 1, true);
+      clusterPub_ = nh.advertise<sensor_msgs::PointCloud2>("primary_cluster", 1, true);
+      planePub_ = nh.advertise<sensor_msgs::PointCloud2>("plane", 1, true);
+      nonPlanePub_ = nh.advertise<sensor_msgs::PointCloud2>("non_plane", 1, true);
+
     }
   }
 
@@ -137,31 +139,36 @@ public:
 
     // plane segmentation and removal
     removePlane(cloudPtr);
-    //object_pub_.publish(*cloudPtr);
+    ROS_INFO_STREAM("after plane removal/focussing cloud has " << cloudPtr->size() << " points");
 
     // cluster extraction
     std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> pclClusters = extractClusters(cloudPtr);
 
+    // set up publishers to show object clouds
     std::vector<ros::Publisher> cluster_publishers;
-
+    int cluster_id = 0;
+    for(int i =0; i < pclClusters.size(); ++i){
+      cluster_publishers.push_back(nh_.advertise<sensor_msgs::PointCloud2>("cropped_cloud_" + std::to_string(cluster_id), 1, true));
+      cluster_id++;
+    }
+    ros::Duration(1.0).sleep();  // sleep for bit to let publishers start up
 
     // convert clusters to ros pointlcouds
     // iterate through each cluster in clusters, convert, set header and timestamp
-    int cluster_id = 0;
+    cluster_id = 0;
     for(pcl::PointCloud<pcl::PointXYZ>::Ptr pclCluster : pclClusters){
       pcd_proc::Cluster cluster;
       pcl::toROSMsg(*pclCluster, cluster.pointcloud);
       cluster.pointcloud.header.frame_id = world_frame;
       cluster.pointcloud.header.stamp = ros::Time::now();
-      cluster_pub_.publish(cluster.pointcloud);
+      clusterPub_.publish(cluster.pointcloud);
       // MIGHT GOTTA COMBINE THSES TWO INTO ONE FUNCTION LATER
       extractTopPose(cloudPtr, cluster);
       extract3DBox(cloudPtr, cluster);
       res.clusters.push_back(cluster);
 
-      cluster_publishers.push_back(nh_.advertise<sensor_msgs::PointCloud2>("cropped_cloud_" + std::to_string(cluster_id), 1, true));
-      cluster_publishers.back().publish(cluster.pointcloud);
-      cluster_id ++;
+      cluster_publishers[cluster_id].publish(cluster.pointcloud);
+      cluster_id++;
     }
 
 
@@ -196,7 +203,7 @@ public:
       //    pcl::toROSMsg(xyz_filtered_cloud, *cropped);
       cropped->header.frame_id = world_frame;
       cropped->header.stamp = ros::Time::now();
-      cropped_pub_.publish(*cropped);
+      croppedPub_.publish(*cropped);
     }
   }
 
@@ -215,13 +222,16 @@ public:
 
     //pcl::PointCloud<pcl::PointXYZ>::Ptr cropped_cloud(new pcl::PointCloud<pcl::PointXYZ>(zf_cloud));  // this passes in either passthrough or crop filtered cloud.
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_plane(new pcl::PointCloud<pcl::PointXYZ>());
-    // Create the segmentation object for the planar model and set all the parameters
+    // Segment the largest planar component perpendicular to the world z axis from the cropped cloud
     pcl::SACSegmentation<pcl::PointXYZ> seg;
     pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
     pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+    Eigen::Vector3f axis = Eigen::Vector3f(0.0, 0.0, 1.0);
     seg.setOptimizeCoefficients(true);
-    seg.setModelType(pcl::SACMODEL_PLANE);
+    seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
     seg.setMethodType(pcl::SAC_RANSAC);
+    seg.setAxis(axis);
+    seg.setEpsAngle(5.0f * (M_PI / 180.0f));  // allow a difference between plane normal and axis
     seg.setMaxIterations(plane_max_iter);
     seg.setDistanceThreshold(plane_dist_thresh);
     // Segment the largest planar component from the cropped cloud
@@ -240,6 +250,7 @@ public:
       ROS_INFO_STREAM("PointCloud representing the planar component: " << cloud_plane->points.size()
                                                                        << " data points.");
 
+
       // Remove the planar inliers, extract the rest
       extract.setNegative(true);
       extract.filter(*cloudPtr);
@@ -248,10 +259,11 @@ public:
       ROS_INFO("Filtering out any points in front, behind and either side of plane (all sides except above plane)");
       Eigen::Vector4f min_pt, max_pt;
       pcl::getMinMax3D(*cloud_plane, min_pt, max_pt);
+      float padding = 0.02;  // 4cm
       float min_x = min_pt[0];
-      float min_y = min_pt[1];
-      float max_x = max_pt[0];
-      float max_y = max_pt[1];
+      float min_y = min_pt[1] + padding;
+      float max_x = max_pt[0] - padding;
+      float max_y = max_pt[1] - padding;
       float max_z = max_pt[2];
       // use max pt for z so you dont leave top of table legs in
       ROS_INFO_STREAM("removing points below x: " << min_x << " y: " << min_y << " z: " << max_z);
@@ -263,6 +275,19 @@ public:
       crop.setMin(min_point);
       crop.setMax(max_point);
       crop.filter(*cloudPtr);
+
+      if (debug_)
+      {
+        // publish plane cloud
+        sensor_msgs::PointCloud2::Ptr rosPlane(new sensor_msgs::PointCloud2);
+        pcl::toROSMsg(*cloud_plane, *rosPlane);
+        planePub_.publish(rosPlane);
+
+        // publish non plane cloud
+        sensor_msgs::PointCloud2::Ptr rosNonPlane(new sensor_msgs::PointCloud2);
+        pcl::toROSMsg(*cloudPtr, *rosNonPlane);
+        nonPlanePub_.publish(rosNonPlane);
+      }
 
 
     }
@@ -345,7 +370,7 @@ public:
 private:
   ros::ServiceServer server_;
   ros::ServiceServer server2_;
-  ros::Publisher cropped_pub_, object_pub_, cluster_pub_, pick_surface_pub_;
+  ros::Publisher croppedPub_, objectPub_, clusterPub_, planePub_, nonPlanePub_;
   ros::NodeHandle nh_;
   tf::TransformBroadcaster br_;
 
