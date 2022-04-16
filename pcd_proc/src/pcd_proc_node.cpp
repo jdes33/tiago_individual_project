@@ -137,16 +137,20 @@ public:
 
     // plane segmentation and removal
     removePlane(cloudPtr);
+    //object_pub_.publish(*cloudPtr);
 
     // cluster extraction
     std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> pclClusters = extractClusters(cloudPtr);
 
+    std::vector<ros::Publisher> cluster_publishers;
+
+
     // convert clusters to ros pointlcouds
     // iterate through each cluster in clusters, convert, set header and timestamp
+    int cluster_id = 0;
     for(pcl::PointCloud<pcl::PointXYZ>::Ptr pclCluster : pclClusters){
       pcd_proc::Cluster cluster;
       pcl::toROSMsg(*pclCluster, cluster.pointcloud);
-      cluster_pub_.publish(cluster.pointcloud);
       cluster.pointcloud.header.frame_id = world_frame;
       cluster.pointcloud.header.stamp = ros::Time::now();
       cluster_pub_.publish(cluster.pointcloud);
@@ -154,8 +158,11 @@ public:
       extractTopPose(cloudPtr, cluster);
       extract3DBox(cloudPtr, cluster);
       res.clusters.push_back(cluster);
+
+      cluster_publishers.push_back(nh_.advertise<sensor_msgs::PointCloud2>("cropped_cloud_" + std::to_string(cluster_id), 1, true));
+      cluster_publishers.back().publish(cluster.pointcloud);
+      cluster_id ++;
     }
-    //cluster_pub_.publish(res.clusters.at(0).pointcloud);
 
 
     // optional statistical outlier removal (MAYBE DO WITHING EXTRACT CLUSTERS)
@@ -236,6 +243,28 @@ public:
       // Remove the planar inliers, extract the rest
       extract.setNegative(true);
       extract.filter(*cloudPtr);
+
+      // filter any points in front, behind and either side of plane (all sides except above plane)
+      ROS_INFO("Filtering out any points in front, behind and either side of plane (all sides except above plane)");
+      Eigen::Vector4f min_pt, max_pt;
+      pcl::getMinMax3D(*cloud_plane, min_pt, max_pt);
+      float min_x = min_pt[0];
+      float min_y = min_pt[1];
+      float max_x = max_pt[0];
+      float max_y = max_pt[1];
+      float max_z = max_pt[2];
+      // use max pt for z so you dont leave top of table legs in
+      ROS_INFO_STREAM("removing points below x: " << min_x << " y: " << min_y << " z: " << max_z);
+      ROS_INFO_STREAM("removing points above x: " << max_x << " y: " << max_y);
+      pcl::CropBox<pcl::PointXYZ> crop;
+      crop.setInputCloud(cloudPtr);
+      Eigen::Vector4f min_point = Eigen::Vector4f(min_x, min_y, max_z, 0);
+      Eigen::Vector4f max_point = Eigen::Vector4f(max_x, max_y, z_filter_max, 0);
+      crop.setMin(min_point);
+      crop.setMax(max_point);
+      crop.filter(*cloudPtr);
+
+
     }
     else
     {
