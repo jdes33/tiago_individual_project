@@ -42,12 +42,13 @@ class ManipulationArea:
             # do pickup pose
             pass
 
+        print("moving to " + self.name)
         # use move base to go
         self.move_base_client.send_goal(self.goal)
         self.move_base_client.wait_for_result()
         print("i think it's reached the destination, proceeding with inspect surroungins")
         self.inspect_surroundings()  # to build octomap
-        rospy.loginfo("ready, waiting for next task at " + self.name)
+        rospy.loginfo("inspected surroundings, waiting for next task at " + self.name)
 
     def inspect_surroundings(self):
         client = SimpleActionClient("play_motion", PlayMotionAction)
@@ -242,11 +243,12 @@ class ClusterLabeler:
 from pcd_proc.srv import GetClusters
 class Cleanup:
 
-    def __init__(self, manipulation_areas, pickup_indexes):
+    def __init__(self, manipulation_areas, pickup_indexes, label_all = False):
         self.manipulation_areas = manipulation_areas
         self.pickup_indexes = pickup_indexes
-        self.object_destinations = {"unknown":0, "apple": 1}
-        self.label_all = False
+        self.object_destinations = {"unknown":0, "apple": 0, "banana":0, "fork":0}
+        # for debugging/visual purpose can label all clusters instead of just the one to be picked
+        self.label_all = label_all
         self.cluster_labeler = ClusterLabeler()
 
 
@@ -276,10 +278,13 @@ class Cleanup:
                 else:
                     label = self.cluster_labeler.label_clusters([clusters[closest_cluster_index]])[0]
 
+                print("picking object called " + label)
                 self.pickup(clusters[closest_cluster_index])
                 destination = self.object_destinations[label]
-                self.manipulation_areas[destination].go()
+                self.manipulation_areas[destination].go(False)
+                print("placing object called " + label)
                 self.place()
+
 
     def get_clusters(self):
         # call cluster service to get clusters
@@ -544,9 +549,10 @@ if __name__ == '__main__':
 
     # ROSTOPIC ECHO /AMCL_POSE TO GET POSES
     manipulation_areas = [
-        ManipulationArea("table1", (2,0), (0.0, 0.0, 0.0, 1.0)),
+        ManipulationArea("back_room", (-2.86942732871, -0.219775309016), (0.0, 0.0, -0.997891458136, 0.0649048363319)),
+        ManipulationArea("table1", (2, 0), (0.0, 0.0, 0.0, 1.0)),
     ]
-    pickup_areas = [0]
-    cleanup = Cleanup(manipulation_areas, pickup_areas)
+    pickup_areas = [1]
+    cleanup = Cleanup(manipulation_areas, pickup_areas, True)
     cleanup.run_cleanup()
     rospy.spin()
