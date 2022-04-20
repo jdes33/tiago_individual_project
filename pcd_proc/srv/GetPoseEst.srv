@@ -1,0 +1,7 @@
+sensor_msgs/PointCloud2 detected_object
+std_msgs/String[] file_names
+---
+sensor_msgs/PointCloud2 transformed_cloud  # the transformed template (could be large quite dense)
+geometry_msgs/Pose estimated_pose
+uint16 index  # index of template with best pose in file_names
+float64 fitness_score

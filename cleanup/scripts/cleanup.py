@@ -8,11 +8,16 @@ import rospy
 from actionlib import SimpleActionClient
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from play_motion_msgs.msg import PlayMotionAction, PlayMotionGoal
+
+from std_srvs.srv import Empty, EmptyRequest
+from trajectory_msgs.msg import JointTrajectoryPoint, JointTrajectory
+
 class ManipulationArea:
 
     def __init__(self, name, position, orientation):
 
         self.name = name
+        self.head_cmd = rospy.Publisher('/head_controller/command', JointTrajectory, queue_size=1, latch=True)
 
         self.move_base_client = SimpleActionClient("/move_base", MoveBaseAction)
         self.move_base_client.wait_for_server()
@@ -29,6 +34,9 @@ class ManipulationArea:
         self.goal.target_pose.pose.orientation.z = orientation[2]
         self.goal.target_pose.pose.orientation.w = orientation[3]
 
+        self.clear_octomap_srv = rospy.ServiceProxy('/clear_octomap', Empty)
+
+
         ### another option for orientation:
         #quaternionArray = tf.transformations.quaternion_about_axis(theta, (0,0,1))
 		# quaternion_about_axis offers a convenient way for calculating the members of a quaternion.
@@ -42,11 +50,13 @@ class ManipulationArea:
             # do pickup pose
             pass
 
+        self.raise_head()
         print("moving to " + self.name)
         # use move base to go
         self.move_base_client.send_goal(self.goal)
         self.move_base_client.wait_for_result()
         print("i think it's reached the destination, proceeding with inspect surroungins")
+        self.clear_octomap_srv.call(EmptyRequest())
         self.inspect_surroundings()  # to build octomap
         rospy.loginfo("inspected surroundings, waiting for next task at " + self.name)
 
@@ -60,13 +70,21 @@ class ManipulationArea:
         client.send_goal(goal)
         client.wait_for_result(rospy.Duration(10.0))
 
-
+    def raise_head(self):
+        rospy.loginfo("Making head look directly forward")
+        jt = JointTrajectory()
+        jt.joint_names = ['head_1_joint', 'head_2_joint']
+        jtp = JointTrajectoryPoint()
+        jtp.positions = [0.0, 0.0]
+        jtp.time_from_start = rospy.Duration(2.0)
+        jt.points.append(jtp)
+        self.head_cmd.publish(jt)
+        rospy.loginfo("Done.")
 
 
 
 import tf2_ros
 from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
-import tf2_py as tf2
 from yolo4.srv import DetectObjects
 # for 3d point to pixel
 from image_geometry import PinholeCameraModel
@@ -111,9 +129,8 @@ class ClusterLabeler:
             print("HI THERE GONNA TRY AND LOOKUP A TRANSFROM")
             trans = self.tf_buffer.lookup_transform("xtion_rgb_optical_frame","base_footprint", rospy.Time())
             print("DID THE TRANSFORM LOOKUP")
-        except tf2.LookupException as ex:
-            rospy.logwarn(ex)
-        except tf2.ExtrapolationException as ex:
+
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
             rospy.logwarn(ex)
 
         print("detections: ")
@@ -155,7 +172,7 @@ class ClusterLabeler:
 
 
         ## IF YOU PREFER MAYBE MAKE MARKER CLASS LIKE THE CONSTRUCT, BUT I THINK THIS IS OKAY
-        self.publish_text_markers(text_marker_data, 5)  # display text markers above each cluster for 5 seconds
+        self.publish_text_markers(text_marker_data, 10)  # display text markers above each cluster for 10 seconds
         # return list of labels
         return [data[0] for data in text_marker_data]
 
@@ -253,7 +270,7 @@ from haf_grasping.srv import *  ## still needed ??
 from haf_grasping.msg import GraspInput#, GraspOutput
 from geometry_msgs.msg import PoseStamped, Quaternion
 from haf_grasping.msg import CalcGraspPointsServerAction, CalcGraspPointsServerGoal
-from moveit_msgs.msg import Grasp#, GripperTranslation, PlaceLocation
+from moveit_msgs.msg import Grasp, PlaceLocation#, GripperTranslation,
 import tf  # just for transformations, if you're doing stuff like broadcasting then use tf2_ros
 from trajectory_msgs.msg import JointTrajectoryPoint, JointTrajectory
 import copy
@@ -263,12 +280,17 @@ from std_srvs.srv import Empty, EmptyRequest
 ##from geometry_msgs.msg import , Point,Pose, PoseStamped, PoseArray,
 
 
+# make global for now
+plane_max_pt = None
+plane_min_pt = None
+
+
 # prepare_robot, raise_arm, lift_torso, lower_head are from tiago_tutorials: tiago_pick_demo, pick_client.py
 class Manipulator:
 
     def __init__(self):
 
-        roscpp_initialize(sys.argv)  # for moveit stuff
+        #roscpp_initialize(sys.argv)  # for moveit stuff
 
         rospy.loginfo("Waiting for '/play_motion' AS...")
         self.play_motion_client = SimpleActionClient('/play_motion', PlayMotionAction)
@@ -277,15 +299,17 @@ class Manipulator:
             exit()
 
         self.scene = PlanningSceneInterface()
-        robot = RobotCommander()
-        self.right_arm = MoveGroupCommander("arm_torso")
-        print(self.right_arm.get_named_targets())
+        self.robot = RobotCommander()
+        self.arm_torso = MoveGroupCommander("arm_torso")
+        print(self.arm_torso.get_goal_joint_tolerance())
+        print(self.arm_torso.get_current_joint_values())
+        print(self.arm_torso.get_named_targets())
         self.clear_octomap_srv = rospy.ServiceProxy('/clear_octomap', Empty)
         self.clear_octomap_srv.wait_for_service()
         rospy.loginfo("Connected!")
 
         #print "============ Robot Groups:"
-        print(robot.get_group_names())
+        print(self.robot.get_group_names())
         #print right_arm.get_named_targets()
         #right_gripper = MoveGroupCommander("gripper")
         #print right_gripper.get_named_targets()
@@ -299,12 +323,18 @@ class Manipulator:
 
 
     def pick(self, cluster):
+
+        self.clear_scene()
+
+        #self.scene.remove_world_object("table")
+        #self.scene.remove_world_object("object")
+        #self.scene.remove_attached_object()  # removes all previously attached objects
         # move to safe pick position
         #self.prepare_robot()
         self.lower_head()
         self.unfold_arm()
         self.lift_torso()  # maybe could do all three in one go then wait for result so they do simulataneously???!?
-        self.clear_octomap_srv.call(EmptyRequest())
+        ##self.clear_octomap_srv.call(EmptyRequest())
         rospy.sleep(2.0)  # Removing is fast
         #self.raise_arm()
         # set search center for haf grasping and get grasp
@@ -317,8 +347,16 @@ class Manipulator:
         p.pose.position.x = cluster.min_pt.x + ((cluster.max_pt.x - cluster.min_pt.x) / 2.0)
         p.pose.position.y = cluster.min_pt.y + ((cluster.max_pt.y - cluster.min_pt.y) / 2.0)
         p.pose.position.z =  cluster.min_pt.z + ((cluster.max_pt.z - cluster.min_pt.z) / 2.0)#cluster.target_pose.position.z / 2.0# resp1.min_pt.z + height / 2.0#
-        self.scene.add_box("object_to_pick", p, (2*(cluster.max_pt.x - cluster.min_pt.x), 2*(cluster.max_pt.y - cluster.min_pt.y), 2*(cluster.max_pt.z - cluster.min_pt.z)))#resp1.target_pose.position.z))
-        #rospy.sleep(1)
+        self.scene.add_box("object_to_pick", p, ((cluster.max_pt.x - cluster.min_pt.x)+0.025, (cluster.max_pt.y - cluster.min_pt.y)+0.025, 2*(cluster.max_pt.z - cluster.min_pt.z)))#resp1.target_pose.position.z))
+
+        # add table
+        p.pose.position.x = plane_min_pt.x + (plane_max_pt.x - plane_min_pt.x) / 2.0
+        p.pose.position.y = plane_min_pt.y + (plane_max_pt.y - plane_min_pt.y) / 2.0
+        p.pose.position.z = plane_min_pt.z - 0.1
+        self.scene.add_box("table", p, ((plane_max_pt.x - plane_min_pt.x), (plane_max_pt.y - plane_min_pt.y), (0.001)))#resp1.target_pose.position.z))
+        self.arm_torso.set_support_surface_name("table")
+
+        rospy.sleep(1)
         rospy.loginfo("added objects")
 
         # define a list of grasps, for now a single grasp
@@ -332,10 +370,11 @@ class Manipulator:
         grasps[0].grasp_pose.header.frame_id = "base_footprint"
 
         if grasp.graspOutput.eval == -20:
-            print("NO GRASP FOUND BY HAF, using basic grasp")
-            q = tf.transformations.quaternion_from_euler(-0.011, 1.57, 0.037)
-            print( "GOING TO", p.pose.position.x, p.pose.position.y, p.pose.position.z)# + 0.23
-            grasps[0].grasp_pose.pose = Pose(Point(p.pose.position.x, p.pose.position.y, 0.24), Quaternion(*q))
+            rospy.logwarn("NO GRASP FOUND BY HAF")
+            return False
+            #q = tf.transformations.quaternion_from_euler(-0.011, 1.57, 0.037)
+            #print( "GOING TO", p.pose.position.x, p.pose.position.y, p.pose.position.z)# + 0.23
+            #grasps[0].grasp_pose.pose = Pose(Point(p.pose.position.x, p.pose.position.y, 0.24), Quaternion(*q))
         else:
             print( "Using haf grasp")
             grasps[0].grasp_pose.pose.position = grasp.graspOutput.averagedGraspPoint
@@ -359,7 +398,7 @@ class Manipulator:
         grasps[0].pre_grasp_approach.direction.vector.x = 0.0
         grasps[0].pre_grasp_approach.direction.vector.y = 0.0
         grasps[0].pre_grasp_approach.direction.vector.z = -1.0
-        grasps[0].pre_grasp_approach.min_distance = 0.1
+        grasps[0].pre_grasp_approach.min_distance = 0.05#0.1
         grasps[0].pre_grasp_approach.desired_distance = 0.5
 
         # define the pre-grasp posture, this defines the trajectory position of the joints in the end effector group before we go in for the grasp
@@ -378,12 +417,12 @@ class Manipulator:
         grasp_posture = copy.deepcopy(pre_grasp_posture)
         grasp_posture.points[0].time_from_start = rospy.Duration(2.0 + 1.0)
         jtpoint2 = JointTrajectoryPoint()
-        finger_dist = 0.0
+        finger_dist = 0.0002  # goal joint tolerance is 0.0001
         print( "finger dist = ", str(finger_dist))
         jtpoint2.positions = [finger_dist, finger_dist]
         jtpoint2.time_from_start = rospy.Duration(2.0 + 1.0 + 3.0)
-        #jtpoint2.effort.append(1.0)
-        #jtpoint2.effort.append(1.0)
+        #jtpoint2.effort.append(-14.0)
+        #jtpoint2.effort.append(-14.0)
         grasp_posture.points.append(jtpoint2)
         grasps[0].grasp_posture = grasp_posture
 
@@ -396,27 +435,103 @@ class Manipulator:
         grasps[0].post_grasp_retreat.min_distance = 0.01
 
         # links_to_allow_contact: ["gripper_left_finger_link", "gripper_right_finger_link", "gripper_link"]
-        grasps[0].allowed_touch_objects = ['<octomap>', 'object_to_pick']  # THIS LEFT EMPTY ON THINGY
+        #grasps[0].allowed_touch_objects = ['<octomap>', 'object']  # THIS LEFT EMPTY ON THINGY
         #grasps[0].links_to_allow_contact = ["gripper_left_finger_link", "gripper_right_finger_link", "gripper_link"]
         #Don't restrict contact force
         grasps[0].max_contact_force = 0.0
         print( "max contact force", grasps[0].max_contact_force)
+
+        # COULD GET AND SET GOAL JOINT TOLERANCE WITH MOVEGROUPCOMMANDER, IN THIS CASE OUR ARM TORSO OBJECT, COULD ALSO GET JOINT VALUES AND POSITIONS
 
         print("the grasp: ", grasps[0])
         rospy.sleep(5)
 
 
         # pick the object
-        self.right_arm.pick("object_to_pick", grasps)
+        self.arm_torso.pick("object_to_pick", grasps)
+        print(self.arm_torso.get_current_joint_values())
 
-        self.scene.remove_world_object("object_to_pick")
-        self.scene.remove_attached_object()  # removes all previously attached objects
+        self.scene.remove_world_object("table")
 
-        self.raise_head()
+
+        self.scene.attach_box("arm_tool_link", "object_to_pick", touch_links=self.robot.get_link_names(group="gripper"))  # attach object manually in case goal tolerance violated
+        ##self.scene.remove_world_object("object")
+
+        self.lift_torso()  ## SHOULD PROBS RAISE ARM COZ WHAT IF ALREADY LIFTED?
         self.home_position()
+        self.raise_head()
 
-        roscpp_shutdown()# for moveit stuff
 
+        #roscpp_shutdown()# for moveit stuff
+
+        return True # MAYBE CHECK IF ACUTALLY PICKED BY LOOKING AT IF GRIPPER IS CLOSED (if not closed and exerting effort then succesful, sub to /joint_states)
+
+
+    def place(self):
+
+        ##self.clear_octomap_srv.call(EmptyRequest())
+        #self.unfold_arm()
+        #rospy.sleep(3)
+
+        rospy.loginfo("Generating place locations")
+
+        place_locations = []
+
+        place_location = PlaceLocation()
+        # set place location pose
+        place_location.place_pose = PoseStamped()
+        place_location.place_pose.header.frame_id = "base_footprint"
+        #q = tf.transformations.quaternion_from_euler(0, 1.57, 0)
+        place_location.place_pose.pose.position.x = 0.8
+        place_location.place_pose.pose.position.y = 0.0
+        place_location.place_pose.pose.position.z = 0.4
+        #place_location.place_pose.pose.position.x = 0.5
+        #place_location.place_pose.pose.orientation = Quaternion(*q)
+        place_location.place_pose.pose.orientation.w = 1
+
+        # set pre place approach
+        place_location.pre_place_approach.direction.header.frame_id = "base_footprint"
+        # set direction to negative z axis (move arm down)
+        place_location.pre_place_approach.direction.vector.z = -1.0
+        place_location.pre_place_approach.min_distance = 0.0000095
+        place_location.pre_place_approach.desired_distance = 0.115
+
+        # set post grasp retreat
+        place_location.post_place_retreat.direction.header.frame_id = "base_footprint"
+        # set direction to oositive z axis (move arm up)
+        place_location.post_place_retreat.direction.vector.z = 1.0
+        place_location.post_place_retreat.min_distance = 0.00001
+        place_location.post_place_retreat.desired_distance = 0.25
+
+        # set posture of eef after placing object (open gripper)
+        post_place_posture = JointTrajectory()
+        post_place_posture.header.frame_id = "arm_tool_link"
+        post_place_posture.joint_names = ["gripper_left_finger_joint", "gripper_right_finger_joint"]
+        jtpoint = JointTrajectoryPoint()
+        jtpoint.positions = [0.04, 0.04]
+        jtpoint.time_from_start = rospy.Duration(2.0)
+        post_place_posture.points.append(jtpoint)
+        place_location.post_place_posture = post_place_posture
+
+        print("PLACE LOCATION")
+        print(place_location)
+        place_locations.append(place_location)
+
+        rospy.loginfo("Placing object")
+        self.arm_torso.set_planning_time(10)
+        self.arm_torso.place("object_to_pick", place_locations)
+        rospy.loginfo("Done placing")
+
+        self.home_position()
+        self.clear_scene()
+
+        #self.scene.remove_attached_object()  # removes all previously attached objects
+
+
+    def clear_scene(self):
+        self.scene.remove_attached_object()
+        self.scene.remove_world_object()
+        self.scene.clear()
 
     def get_haf_grasp(self, cluster):
 
@@ -533,23 +648,20 @@ class Manipulator:
     def drop(self): # DOES NOT NECESSARYILY NEED TO BE IN THIS CLASS
         pass
 
-    def place(self):
-        pass
 
 
 
 
 
 
-
-
-from pcd_proc.srv import GetClusters
+import tf2_ros
+from pcd_proc.srv import GetClusters, GetPoseEst
 class Cleanup:
 
     def __init__(self, manipulation_areas, pickup_indexes, label_all = False):
         self.manipulation_areas = manipulation_areas
         self.pickup_indexes = pickup_indexes
-        self.object_destinations = {"unknown":0, "apple": 0, "banana":0, "fork":0, "sports ball":0}
+        self.object_destinations = {"unknown":0, "apple": 0, "banana":0, "fork":0, "sports ball":0, "donut":0}
         # for debugging/visual purpose can label all clusters instead of just the one to be picked
         self.label_all = label_all
         self.cluster_labeler = ClusterLabeler()
@@ -565,7 +677,7 @@ class Cleanup:
                 self.manipulation_areas[pickup_index].go(True)
                 clusters = self.get_clusters()
 
-                # MAYBE DISREGARD/POP ANY CLUSTERS THAT ARE OUT OF REACH??
+                # MAYBE DISREGARD/POP ANY CLUSTERS THAT ARE OUT OF REACH or too big?? such as the master chef can, can use top pose though ideally use grasp points 1 and 2 to check
 
                 if len(clusters) == 1:
                     clean = True
@@ -576,7 +688,56 @@ class Cleanup:
                     rospy.loginfo("Seems there aren't any more items at " + self.manipulation_areas[pickup_index].name + ".")
                     break
 
+                # find which object is closest in x direction (closer to front edge of table)
                 closest_cluster_index = self.get_closest(clusters)
+                if abs(clusters[closest_cluster_index].top_center_pose.position.y) > 0.1:  # if y difference greater than threshold  # COULD CHANGE TO IF XY EUC DIST IS GREATER THAN THRESH
+                    # move to be in front of it and recalculate clusters
+                    # we move as reach is circuluar, so it greatest when in front, may also help object detection
+                    # we recaculate as amcl has uncertainty (and some object models like banana move by themselves overtime)
+                    from actionlib import SimpleActionClient
+                    from tf2_geometry_msgs import PointStamped
+                    from geometry_msgs.msg import Point
+
+                    move_base_client = SimpleActionClient("/move_base", MoveBaseAction)
+                    move_base_client.wait_for_server()
+                    rospy.loginfo("...connected to move base client, adjusting robot position to be in front of object")
+                    # Define the goal
+                    goal = MoveBaseGoal()
+                    goal.target_pose.header.frame_id = 'map'
+                    # get robot current position in map
+                    # get a point along x axis of robot base frame (i.e x =0), and y= cluster.y
+                    ideal_robot_pt = PointStamped()
+                    #ideal_robot_pos.header.stamp = rospy.Time.now()
+                    ideal_robot_pt.header.frame_id = "base_footprint"
+                    ideal_robot_pt.point.x = 0.0
+                    ideal_robot_pt.point.y = clusters[closest_cluster_index].top_center_pose.position.y
+                    ideal_robot_pt.point.z = 0.0
+
+                    # transform that point to the map frame
+                    tf_buffer = tf2_ros.Buffer()
+                    listener = tf2_ros.TransformListener(tf_buffer)
+                    rospy.sleep(1.0)
+                    target_pt = tf_buffer.transform(ideal_robot_pt, "map")
+
+                    print(target_pt)
+                    # make robot move to that point
+                    goal.target_pose.pose.position.x = target_pt.point.x
+                    goal.target_pose.pose.position.y = target_pt.point.y
+                    goal.target_pose.pose.position.z = target_pt.point.z
+                    goal.target_pose.pose.orientation.x = 0
+                    goal.target_pose.pose.orientation.y = 0
+                    goal.target_pose.pose.orientation.z = 0
+                    goal.target_pose.pose.orientation.w = 1
+                    move_base_client.send_goal(goal)
+                    move_base_client.wait_for_result()
+                    print("Adjusted robot position")
+
+                    clusters = self.get_clusters()
+                    # same cluster should be identified, by order of list may have change so recompute
+                    closest_cluster_index = self.get_closest(clusters)
+
+
+
                 label = ""
                 if self.label_all:
                     labels = self.cluster_labeler.label_clusters(clusters)
@@ -584,17 +745,29 @@ class Cleanup:
                 else:
                     label = self.cluster_labeler.label_clusters([clusters[closest_cluster_index]])[0]
 
+
+                ## start pose estimate
+                print("length of data BEFORE: ", len(clusters[closest_cluster_index].pointcloud.data))
+                self.get_pose_estimate(clusters[closest_cluster_index], label)
+                print("length of data after SHOULD BE SAME AS BEFORE: ", len(clusters[closest_cluster_index].pointcloud.data))
+
+                ## end pose est
+
+
                 print("picking object called " + label)
-                self.manipulator.pick(clusters[closest_cluster_index])
+                self.manipulator.clear_scene()
+                pick_success = self.manipulator.pick(clusters[closest_cluster_index])
 
                 destination = self.object_destinations[label]
                 self.manipulation_areas[destination].go(False)
 
                 ## MAYBE CHECK IF GRIPPER IS FULLY CLOSED, SO YOU KNOW IF SUCCESSFUL
-
-                print("placing object called " + label)
-                self.place()
-
+                if pick_success:
+                    print("placing object called " + label)
+                    self.manipulator.place()
+                else:
+                    rospy.logwarn("Unable to pick from this area. Skipping this area.")
+                    break
 
     def get_clusters(self):
         # call cluster service to get clusters
@@ -607,238 +780,73 @@ class Cleanup:
         except rospy.ServiceException as e:
             print("GetClusters service call failed: %s"%e)
 
+        # delete later if not using this
+        global plane_min_pt, plane_max_pt
+        plane_min_pt = get_clusters_response.plane_min_pt  # DELETE LATER IF NOT USING, OR MAKE NON GLOBAL SOMEHOW IF YOU ARE USING
+        plane_max_pt = get_clusters_response.plane_max_pt
+
         return get_clusters_response.clusters
 
     def get_closest(self, clusters):
-        return 0 # NEED TO IMPLEMENT THIS PROPERLY
+        # all clusters are in base frame, so closest is just distance of each from origin
 
-    def pickup(self, cluster):
-        # NEED TO DO PLANNING SCENE STUFF
-        # NEED TO DO HAF GRASPING STUFF
-        # PROBS TOO MUCH TO DO IN ONE FUNCTION UNLESS YOU MAKE PLANNING SCENE AN ATTRIBUTE OF THIS CLASS
-        # THINK ABOUT WHATIS BEST WAY
-        # INPUTS WOULD BE CLOUD, THERE WOULD BE NO OUTPUT (OR MAYBE BOOL FOR SUCCESS, BUT YOU CAN'T EVEN CHECK SUCCESS SO MAYBE NOT FOR NOW)
-        # MAYBE SHOULD DO A CLASS WHICH CONTROLS BOTH PICK AND PLACE, AS YOU MAY NEED TO CARRY OVER INFORMATION????
-        # MAYBE CLASS/SERVER CALLED PICK_PLACE:
-        #    ATTRIBUTES ARE PLANNING SCENE, ....
-        #    METHODS ARE PICK() AND PLACE(), INIT(CLUSTER), ....
-        # USE CTRL+/ IF YOU WANT TO UNCOMMENT THE BELOW (THO DON'T EXPECT IT TO WORK IT'S SIMPLY COPIED FROM PICK_TEST.PY)
-            # scene = PlanningSceneInterface()
-            # robot = RobotCommander()
-            # right_arm = MoveGroupCommander("arm_torso")
-            # print "============ Robot Groups:"
-            # print robot.get_group_names()
-            # print right_arm.get_named_targets()
-            # right_gripper = MoveGroupCommander("gripper")
-            # print right_gripper.get_named_targets()
-            # rospy.sleep(1)
-            #
-            #
-            # rospy.loginfo("Creating publishers to torso and head controller...")
-            # torso_cmd = rospy.Publisher('/torso_controller/command', JointTrajectory, queue_size=1, latch=True)
-            # head_cmd = rospy.Publisher('/head_controller/command', JointTrajectory, queue_size=1, latch=True)
-            # rospy.loginfo("Creating publisher for haf_grasping")
-            # haf_pub = rospy.Publisher('/haf_grasping/input_pcd_rcs_path', String, queue_size=1, latch=True)
-            # haf_sub = rospy.Subscriber('/haf_grasping/grasp_hypothesis_with_eval', String, process_haf_grasp)
-            #
-            # rospy.sleep(1)  # LATCHING DONT SEEM TO FIX SO I THINK JUST SLEEP FOR A BIT, MAYBE JUST MAKE LOOK DOWN MOTION OR ACTION INSTEAD
-            # rospy.loginfo("Moving head down")
-            # jt = JointTrajectory()
-            # jt.joint_names = ['head_1_joint', 'head_2_joint']
-            # jtp = JointTrajectoryPoint()
-            # jtp.positions = [0.0, -0.98]
-            # jtp.time_from_start = rospy.Duration(2)
-            # jt.points.append(jtp)
-            # head_cmd.publish(jt)
-            #
-            # rospy.loginfo("Moving torso up/down")
-            # jt = JointTrajectory()
-            # jt.joint_names = ['torso_lift_joint']
-            # jtp = JointTrajectoryPoint()
-            # jtp.positions = [0.0] #[0.34]
-            # jtp.time_from_start = rospy.Duration(2)
-            # jt.points.append(jtp)
-            # torso_cmd.publish(jt)
-            #
-            # rospy.sleep(3.0)  # SLEEP TO WAIT TIL LOOK DOWN ACTION DONE
-            # rospy.loginfo("Done")
-            #
-            #
-            # # clean the scene
-            # scene.remove_world_object("table")
-            # scene.remove_world_object("MApart")
-            # scene.remove_attached_object()  # removes all previously attached objects
-            #
-            #
-            # # FILTER, SEGMENT AND CLUSTER TO FIND 3D OBJECT BOUNDING BOX
-            # rospy.wait_for_service('find_pick')
-            # try:
-            #     pick_as = rospy.ServiceProxy('find_pick', GetTargetPose)
-            #     resp1 = pick_as()
-            #     rospy.loginfo("Got target pose: " + str(resp1.target_pose))
-            # except rospy.ServiceException as e:
-            #     print("Service call failed: %s"%e)
-            #
-            #
-            # # COMPUTE GRASP USING HAF GRASPING
-            # rospy.wait_for_service('/haf_grasping/set_grasp_center')
-            # try:
-            #     set_center_service = rospy.ServiceProxy('/haf_grasping/set_grasp_center', GraspSearchCenter)
-            #     ##p = Point(resp1.target_pose.position)
-            #     resp2 = set_center_service(resp1.target_pose.position)
-            #     if resp2:
-            #         rospy.loginfo("Set search center")
-            # except rospy.ServiceException as e:
-            #     print("Service call failed: %s"%e)
-            #
-            # msg = String()
-            # msg.data = rospack.get_path('cleanup') + "/data/object/detected_object.pcd"
-            # haf_pub.publish(msg)
-            #
-            #
-            # length = abs(resp1.max_pt.x - resp1.min_pt.x)
-            # width = abs(resp1.max_pt.y - resp1.min_pt.y)
-            # height = abs(resp1.max_pt.z - resp1.min_pt.z)
-            # print length, width, height
-            # print resp1.min_pt.x, resp1.min_pt.y, resp1.min_pt.z
-            # print resp1.max_pt.x, resp1.max_pt.y, resp1.max_pt.z
-            #
-            # rospy.sleep(1)
-            #
-            # # publish a demo scene
-            # p = PoseStamped()
-            # p.header.frame_id = robot.get_planning_frame()
-            #
-            # # add a table
-            # p.pose.position.x = 0.6
-            # p.pose.position.y = -0.2
-            # p.pose.position.z = 0.24
-            # #scene.add_box("table", p, (0.5, 1.5, 0.48))
-            #
-            # # add an object to be grasped
-            # p.pose.position.x = resp1.min_pt.x + length / 2.0
-            # p.pose.position.y = resp1.min_pt.y + width / 2.0
-            # p.pose.position.z =  resp1.target_pose.position.z / 2.0# resp1.min_pt.z + height / 2.0#
-            # scene.add_box("MApart", p, (length, width, resp1.target_pose.position.z))#resp1.target_pose.position.z))
-            #
-            #
-            # rospy.sleep(1)
-            # rospy.loginfo("added objects")
-            #
-            # # define a list of grasps, for now a single grasp
-            # grasps = [Grasp()]
-            #
-            # grasps[0].id = "test"
-            #
-            # # set the pose of the Pose of the end effector in which it should attempt grasping
-            # grasps[0].grasp_pose = PoseStamped()
-            # grasps[0].grasp_pose.header.frame_id = "base_footprint"
-            # #q = tf.transformations.quaternion_from_euler(-0.011, 1.57, 0.037)
-            # #print "GOING TO", p.pose.position.x, p.pose.position.y, p.pose.position.z# + 0.23
-            # #grasps[0].grasp_pose.pose = Pose(Point(p.pose.position.x, p.pose.position.y, 0.24), Quaternion(*q))
-            # while haf_ready == False:
-            #     print "waiting for haf grasp"
-            #     rospy.sleep(5)
-            #
-            # if current_haf_grasp["val"] == -20:
-            #     print "NO GRASP FOUND BY HAF, using basic grasp"
-            #     q = tf.transformations.quaternion_from_euler(-0.011, 1.57, 0.037)
-            #     print "GOING TO", p.pose.position.x, p.pose.position.y, p.pose.position.z# + 0.23
-            #     grasps[0].grasp_pose.pose = Pose(Point(p.pose.position.x, p.pose.position.y, 0.24), Quaternion(*q))
-            # else:
-            #     print "Using haf grasp"
-            #     grasps[0].grasp_pose.pose.position.x, grasps[0].grasp_pose.pose.position.y, grasps[0].grasp_pose.pose.position.z = current_haf_grasp["gcp"]
-            #     grasps[0].grasp_pose.pose.position.z = 0.23#0.23  ## this will make almost touch floor # this will make tip of gripper align with position
-            #     q = tf.transformations.quaternion_from_euler(0, 1.57, -math.radians(current_haf_grasp["roll"]))
-            #     grasps[0].grasp_pose.pose.orientation = Quaternion(*q)
-            #     print "hey"
-            #     print grasps[0].grasp_pose.pose
-            # haf_ready = False
-            # rospy.sleep(2)
-            #
-            # # define the pre-grasp approach, this is used to define the direction from which to approach the object and the distance to travel
-            # grasps[0].pre_grasp_approach.direction.header.frame_id = "base_footprint"
-            # grasps[0].pre_grasp_approach.direction.vector.x = 0.0
-            # grasps[0].pre_grasp_approach.direction.vector.y = 0.0
-            # grasps[0].pre_grasp_approach.direction.vector.z = -1.0
-            # grasps[0].pre_grasp_approach.min_distance = 0.1
-            # grasps[0].pre_grasp_approach.desired_distance = 0.5
-            #
-            # # define the pre-grasp posture, this defines the trajectory position of the joints in the end effector group before we go in for the grasp
-            # # WE WANT TO OPEN THE GRIPPER, YOU CAN TAKE SOME OF THIS AND MAKE INTO CLOSE GRIPPER FUNCTION
-            # pre_grasp_posture = JointTrajectory()
-            # pre_grasp_posture.header.frame_id = "arm_tool_link"
-            # pre_grasp_posture.joint_names = ["gripper_left_finger_joint", "gripper_right_finger_joint"]
-            # jtpoint = JointTrajectoryPoint()
-            # #dist = sum([(current_haf_grasp["gp1"][i] - current_haf_grasp["gp2"][i])**2 for i in range(3)]) ** 0.5
-            # #jtpoint.positions = [dist/2.0, dist/2.0]
-            # jtpoint.positions = [0.04, 0.04]
-            # jtpoint.time_from_start = rospy.Duration(2.0)
-            # pre_grasp_posture.points.append(jtpoint)
-            # grasps[0].pre_grasp_posture = pre_grasp_posture
-            #
-            # # set the grasp posture, this defines the trajectory position of the joints in the end effector group for grasping the object
-            # # WE WANT TO CLOSE THE GRIPPER
-            # grasp_posture = copy.deepcopy(pre_grasp_posture)
-            # grasp_posture.points[0].time_from_start = rospy.Duration(2.0 + 1.0)
-            # jtpoint2 = JointTrajectoryPoint()
-            # dist = sum([(current_haf_grasp["gp1"][i] - current_haf_grasp["gp2"][i])**2 for i in range(3)]) ** 0.5
-            #
-            # finger_dist = (dist * 0.8)/2.0 # 0.004#0.003
-            # finger_dist = 0.0
-            # print "finger dist = ", str(finger_dist)
-            #
-            # jtpoint2.positions = [finger_dist, finger_dist]
-            # jtpoint2.time_from_start = rospy.Duration(2.0 + 1.0 + 3.0)
-            # #jtpoint2.effort.append(1.0)
-            # #jtpoint2.effort.append(1.0)
-            # grasp_posture.points.append(jtpoint2)
-            # grasps[0].grasp_posture = grasp_posture
-            #
-            # # set the post-grasp retreat, this is used to define the direction in which to move once the object is grasped and the distance to travel.
-            # grasps[0].post_grasp_retreat.direction.header.frame_id = "base_footprint"
-            # grasps[0].post_grasp_retreat.direction.vector.x = 0.0
-            # grasps[0].post_grasp_retreat.direction.vector.y = 0.0
-            # grasps[0].post_grasp_retreat.direction.vector.z = 1.0
-            # grasps[0].post_grasp_retreat.desired_distance = 0.25
-            # grasps[0].post_grasp_retreat.min_distance = 0.01
-            #
-            # # links_to_allow_contact: ["gripper_left_finger_link", "gripper_right_finger_link", "gripper_link"]
-            # #grasps[0].allowed_touch_objects = ["table", "MApart"]  # THIS LEFT EMPTY ON THINGY
-            # #grasps[0].links_to_allow_contact = ["gripper_left_finger_link", "gripper_right_finger_link", "gripper_link"]
-            # #Don't restrict contact force
-            # grasps[0].max_contact_force = 0.0
-            # print "max contact force", grasps[0].max_contact_force
-            #
-            # # pick the object
-            # right_arm.pick("MApart", grasps)
-            #
-            #
-            # rospy.loginfo("Moving head back up")
-            # jt = JointTrajectory()
-            # jt.joint_names = ['head_1_joint', 'head_2_joint']
-            # jtp = JointTrajectoryPoint()
-            # jtp.positions = [0.0, 0.0]
-            # jtp.time_from_start = rospy.Duration(2.0)
-            # jt.points.append(jtp)
-            # head_cmd.publish(jt)
-            # rospy.sleep(2.5)  # SLEEP TO WAIT TIL LOOK DOWN ACTION DONE
-            # rospy.loginfo("Done")
-            #
-            # rospy.loginfo("MOVING TO HOME POSITION, HOPEFULLY WITH OBJECT")
-            # goal = PlayMotionGoal()
-            # goal.motion_name = 'home'
-            # goal.skip_planning = True
-            # client.send_goal(goal)
-            # client.wait_for_result(rospy.Duration(10.0))
+        closest_idx = -1
+        #closest_dist = clusters[0].top_center_pose.position.x + clusters[0].top_center_pose.position.y
+        closest_dist = clusters[0].top_center_pose.position.x
+        for i in range(len(clusters)):
+            dist = clusters[i].top_center_pose.position.x #(clusters[i].top_center_pose.position.x**2.0 + clusters[i].top_center_pose.position.y**2.0) ** 0.5
+
+            if dist < closest_dist:
+                closest_dist = dist
+                closest_idx = i
+
+        return i
 
 
-        pass
+    # IDK IF THIS CLASS IS THE BEST PLACE TO PUT THIS
+    def get_pose_estimate(self, cluster, label):
 
-    def place(self):
-        ## NEED SERVICE TO GET POINTCLOUD PLANE??? MAYBE JUST MANUALLY STORE FOR EACH OBJECT
-        ## IF YOU HAVE TO MAKE SERVICE FOR PLANE THEN MAYBE JUST MAKE IT IN THIS PACKAGE IN SRC
-        pass
+        rospy.loginfo("trying to find pose estimate for " + label)
+        ## BETTER TO PULL THESE FROM FILE IF POSSIBLE
+        ## you may be able to create another file like coco.names and load it instead when using yolo, up to you !!!!!
+        ## mappings can include things it commonly gets mistaken for, that way it may corect it and return corrected label
+        ##round_objects = ["013_apple","017_orange","053_mini_soccer_ball","054_softball", "055_baseball", "056_tennis_ball", "057_racquetball", "058_golf_ball"]
+        yolo_to_ycb_names = {
+            "apple": ["013_apple"],
+            "banana" : ["011_banana"],
+            "orange": ["017_orange"],
+            "fork" : ["030_fork"],
+            "knife": ["032_knife"],
+            "spoon": ["031_spoon"],
+            "bowl": ["024_bowl"],
+            "cup":["025_mug"],
+            "donut": [],
+            "sports ball": ["053_mini_soccer_ball", "054_softball", "055_baseball", "056_tennis_ball", "057_racquetball", "058_golf_ball"],
+            "scissors":[]
+        }
+
+        if label not in yolo_to_ycb_names or len(yolo_to_ycb_names[label]) == 0:
+            return None
+
+
+        print("hey 415")
+        # call PoseEst service to estimate pose
+        rospy.wait_for_service('/get_pose_estimate')
+        try:
+            print("hey 931")
+            get_pose_est_service = rospy.ServiceProxy('/get_pose_estimate', GetPoseEst)
+            print("hey 852")
+            from std_msgs.msg import String
+            get_pose_est_response = get_pose_est_service(cluster.pointcloud, [String(s) for s in yolo_to_ycb_names[label]])
+            print("hey 825")
+            print(get_pose_est_response)
+        except rospy.ServiceException as e:
+            print("GetClusters service call failed: %s"%e)
+
+
+        rospy.loginfo("done trying to find pose estimate")
+        #return get_clusters_response.clusters
+
 
 
 

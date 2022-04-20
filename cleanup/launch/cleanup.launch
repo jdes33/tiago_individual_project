@@ -8,7 +8,7 @@
   <arg name="rviz" default="true"/>
   
 
-	<param name="octomap_frame" type="string" value="map" />
+	<param name="octomap_frame" type="string" value="map" />  <!-- not working -->
 
   <env name="GAZEBO_MODEL_PATH" value="$(find cleanup)/models" />
   <env name="GAZEBO_RESOURCE_PATH" value="$(find cleanup)/worlds"/>
@@ -40,6 +40,7 @@
   <node name="yolo_server" pkg="yolo4" type="yolo_server.py" respawn="true" />
 
 
+ <!-- <include file="$(find cleanup)/launch/octomap_mapping.launch"/> -->
 
   <!-- <node name="update_octomap_res" pkg="dynamic_reconfigure" type="dynparam"
           args="set_from_parameters /move_group/octomap_resolution">

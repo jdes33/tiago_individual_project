@@ -1,4 +1,6 @@
 # Empty request
 ---
 bool succeeded
-pcd_proc/Cluster[] clusters 
+pcd_proc/Cluster[] clusters
+geometry_msgs/Point plane_min_pt
+geometry_msgs/Point plane_max_pt 

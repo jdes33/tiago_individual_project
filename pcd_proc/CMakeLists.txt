@@ -18,6 +18,7 @@ find_package(catkin REQUIRED COMPONENTS
   pcl_msgs
   tf
   tf_conversions
+  eigen_conversions
 )
 
 ## System dependencies are found with CMake's conventions
@@ -63,6 +64,7 @@ find_package(catkin REQUIRED COMPONENTS
  add_service_files(
    FILES
    GetClusters.srv
+   GetPoseEst.srv
  )
 
 ## Generate actions in the 'action' folder
@@ -214,3 +216,8 @@ include_directories(
 add_executable(pcd_proc_node src/pcd_proc_node.cpp)
 target_link_libraries(pcd_proc_node ${catkin_LIBRARIES})
 add_dependencies(pcd_proc_node pcd_proc_gencpp)
+
+add_executable(pose_estimation_node src/pose_estimation_node.cpp)
+target_link_libraries(pose_estimation_node ${catkin_LIBRARIES})
+add_dependencies(pose_estimation_node pcd_proc_gencpp)
+
