@@ -2,10 +2,10 @@
 #include <tf/transform_datatypes.h>
 #include <tf/transform_listener.h>
 #include <tf/transform_broadcaster.h>
-#include <sensor_msgs/PointCloud2.h>  
+#include <sensor_msgs/PointCloud2.h>
 
 // PCL specific includes
-#include <pcl_conversions/pcl_conversions.h> 
+#include <pcl_conversions/pcl_conversions.h>
 #include "pcl_ros/transforms.h"
 
 #include <pcl/filters/voxel_grid.h>
@@ -423,7 +423,7 @@ ROS_INFO_STREAM("Saved " << sor_cloud_filtered->size() << " data points to data/
       br_.sendTransform(tf::StampedTransform(part_transform, ros::Time::now(), world_frame, "part"));
     }
 
-	
+
 
     return true;
   }

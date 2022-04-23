@@ -37,7 +37,7 @@ class Yolo4:
         model = cv2.dnn_DetectionModel(net)
         model.setInputParams(scale=1 / 255, size=(416, 416), swapRB=True)
 
-        # preform detection
+        # perform detection
         classIds, scores, boxes = model.detect(img, confThreshold=0.4, nmsThreshold=0.4)
         for (classId, score, box) in zip(classIds, scores, boxes):
             cv2.rectangle(img, (box[0], box[1]), (box[0] + box[2], box[1] + box[3]),
@@ -51,11 +51,6 @@ class Yolo4:
             detection = Detection(classes[classId], box[0], box[1], box[2], box[3], score)
 
             res.detections.append(detection)
-
-
-
-        cv2.imwrite("object-detection.jpg", img)
-        print("saved")
 
         #cv2.imshow('Image', img)
         #cv2.waitKey(0)

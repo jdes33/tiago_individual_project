@@ -6,14 +6,13 @@
   <node name="pcd_processing_node" pkg="pcd_proc" type="pcd_proc_node" output="screen">
     <rosparam>
       cloud_topic: "/xtion/depth_registered/points"
-      world_frame: "base_footprint"
-      camera_frame: "xtion_rgb_optical_frame"  <!-- obtained using rostopic echo /xtion/depth_registered/points | grep head -n7 -->
+      robot_base_frame: "base_footprint"
+      <!-- camera_frame: "xtion_rgb_optical_frame" --> <!-- obtained using rostopic echo /xtion/depth_registered/points | grep head -n7 -->
       voxel_leaf_size: 0.004 <!--0.004--> <!-- mm -->
       y_filter_min: -1 <!-- m -->
       y_filter_max:  1 <!-- m -->
       x_filter_min: -1 <!-- m -->
       x_filter_max:  1 <!-- m -->
-      <!-- Add .781  for the top of the table-->
       z_filter_min:  0.005 <!-- m -->
       z_filter_max:  10.0 <!-- m -->
       plane_filter_max_z: 0.25 <!-- Points this height above the plane will be filtered out, useful for when shelf is above plane of interest -->
@@ -27,7 +26,7 @@
 
   <node name="pose_estimation_node" pkg="pcd_proc" type="pose_estimation_node" output="screen">
     <rosparam>
-      world_frame: "base_footprint"
+      robot_base_frame: "base_footprint"
     </rosparam>
   </node>
 

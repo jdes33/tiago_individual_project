@@ -83,6 +83,46 @@ class ManipulationArea:
 
 
 
+class Drawer(ManipulationArea):
+
+    def __init__(self, name, position, orientation):
+        ##super.__init__(name, position, orientation)  #  python 3
+        super(Drawer, self).__init__(name, position, orientation)  #  python 2
+
+        ## CANT OPEN OR CLOSE WHILE HOLDING SOMETHING, WHAT TO DO??
+    def go(self, pickup=False):
+        # move in front of drawer
+        super(Drawer, self).go()
+        # detect pose of drawer handle
+        ###
+        # generate way points to open drawer
+        ###
+        # follow waypoints to open drawer
+
+    def open(self):
+        pass
+
+    def close(self):
+        pass
+
+    ## def generate_place_areas/place_area constraints
+
+class Container(ManipulationArea):
+
+    def __init__(self, name, position, orientation):
+        super(Drawer, self).__init__(name, position, orientation)
+
+    def generate_place_areas(self):
+        ## do pose estimation to find container
+
+        ## computer point above center of container
+
+        pass
+
+
+
+
+
 import tf2_ros
 from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 from yolo4.srv import DetectObjects
@@ -278,7 +318,7 @@ from moveit_commander import MoveGroupCommander, RobotCommander
 import sys
 from std_srvs.srv import Empty, EmptyRequest
 ##from geometry_msgs.msg import , Point,Pose, PoseStamped, PoseArray,
-
+import os
 
 # make global for now
 plane_max_pt = None
@@ -291,6 +331,7 @@ class Manipulator:
     def __init__(self):
 
         #roscpp_initialize(sys.argv)  # for moveit stuff
+
 
         rospy.loginfo("Waiting for '/play_motion' AS...")
         self.play_motion_client = SimpleActionClient('/play_motion', PlayMotionAction)
@@ -310,11 +351,6 @@ class Manipulator:
 
         #print "============ Robot Groups:"
         print(self.robot.get_group_names())
-        #print right_arm.get_named_targets()
-        #right_gripper = MoveGroupCommander("gripper")
-        #print right_gripper.get_named_targets()
-        #rospy.sleep(1)
-
         rospy.loginfo("Creating publishers to torso and head controller...")
         self.torso_cmd = rospy.Publisher('/torso_controller/command', JointTrajectory, queue_size=1, latch=True)
         self.head_cmd = rospy.Publisher('/head_controller/command', JointTrajectory, queue_size=1, latch=True)
@@ -322,34 +358,38 @@ class Manipulator:
         rospy.loginfo("Done initializing Manipulator.")
 
 
-    def pick(self, cluster):
+
+
+    def pick(self, cluster, label):
 
         self.clear_scene()
-
-        #self.scene.remove_world_object("table")
-        #self.scene.remove_world_object("object")
-        #self.scene.remove_attached_object()  # removes all previously attached objects
-        # move to safe pick position
-        #self.prepare_robot()
         self.lower_head()
         self.unfold_arm()
-        self.lift_torso()  # maybe could do all three in one go then wait for result so they do simulataneously???!?
-        ##self.clear_octomap_srv.call(EmptyRequest())
+        self.lift_torso()
         rospy.sleep(2.0)  # Removing is fast
-        #self.raise_arm()
-        # set search center for haf grasping and get grasp
-        grasp = self.get_haf_grasp(cluster)
+
         # add object/s to planning scene (one to be grasped and maybe table if octomap not enough)
-        # publish a demo scene
         p = PoseStamped()
         p.header.frame_id = "base_footprint"#robot.get_planning_frame()
         # add an object to be grasped
-        p.pose.position.x = cluster.min_pt.x + ((cluster.max_pt.x - cluster.min_pt.x) / 2.0)
-        p.pose.position.y = cluster.min_pt.y + ((cluster.max_pt.y - cluster.min_pt.y) / 2.0)
-        p.pose.position.z =  cluster.min_pt.z + ((cluster.max_pt.z - cluster.min_pt.z) / 2.0)#cluster.target_pose.position.z / 2.0# resp1.min_pt.z + height / 2.0#
-        self.scene.add_box("object_to_pick", p, ((cluster.max_pt.x - cluster.min_pt.x)+0.025, (cluster.max_pt.y - cluster.min_pt.y)+0.025, 2*(cluster.max_pt.z - cluster.min_pt.z)))#resp1.target_pose.position.z))
+        pose_est, file_name = self.get_pose_estimate(cluster, label)
+        use_mesh = False
+        if os.path.exists("/home/jason/Desktop/ycb_models/ycb-tools/models/ycb/" + file_name + "/google_16k/nontextured.stl"):
+            use_mesh = True
+        if use_mesh:
+            p.pose = pose_est
+            # add mesh from ycb dataset
+            rospy.loginfo("closest match for " + label + " was " + file_name)
+            self.scene.add_mesh("object_to_pick", p, "/home/jason/Desktop/ycb_models/ycb-tools/models/ycb/" + file_name + "/google_16k/nontextured.stl")
+        else:
+            # estimate with 3d bounding box
+            p.pose.position.x = cluster.min_pt.x + ((cluster.max_pt.x - cluster.min_pt.x) / 2.0)
+            p.pose.position.y = cluster.min_pt.y + ((cluster.max_pt.y - cluster.min_pt.y) / 2.0)
+            p.pose.position.z =  cluster.min_pt.z + ((cluster.max_pt.z - cluster.min_pt.z) / 2.0)#cluster.target_pose.position.z / 2.0# resp1.min_pt.z + height / 2.0#
+            self.scene.add_box("object_to_pick", p, ((cluster.max_pt.x - cluster.min_pt.x)+0.025, (cluster.max_pt.y - cluster.min_pt.y)+0.025, 2*(cluster.max_pt.z - cluster.min_pt.z)))#resp1.target_pose.position.z))
 
         # add table
+        p.pose.orientation = Quaternion(0,0,0,1)
         p.pose.position.x = plane_min_pt.x + (plane_max_pt.x - plane_min_pt.x) / 2.0
         p.pose.position.y = plane_min_pt.y + (plane_max_pt.y - plane_min_pt.y) / 2.0
         p.pose.position.z = plane_min_pt.z - 0.1
@@ -359,11 +399,14 @@ class Manipulator:
         rospy.sleep(1)
         rospy.loginfo("added objects")
 
+        # set search center for haf grasping and get grasp
+        grasp = self.get_haf_grasp(cluster)
+
         # define a list of grasps, for now a single grasp
         grasps = [Grasp()]
 
 
-        grasps[0].id = "test"
+        grasps[0].id = "top_down"
 
         # set the pose of the Pose of the end effector in which it should attempt grasping
         grasps[0].grasp_pose = PoseStamped()
@@ -371,21 +414,13 @@ class Manipulator:
 
         if grasp.graspOutput.eval == -20:
             rospy.logwarn("NO GRASP FOUND BY HAF")
+            self.clear_scene()
             return False
-            #q = tf.transformations.quaternion_from_euler(-0.011, 1.57, 0.037)
-            #print( "GOING TO", p.pose.position.x, p.pose.position.y, p.pose.position.z)# + 0.23
-            #grasps[0].grasp_pose.pose = Pose(Point(p.pose.position.x, p.pose.position.y, 0.24), Quaternion(*q))
         else:
             print( "Using haf grasp")
             grasps[0].grasp_pose.pose.position = grasp.graspOutput.averagedGraspPoint
-            grasps[0].grasp_pose.pose.position.z += 0.2#0.23#0.23  ## this will make almost touch floor # this will make tip of gripper align with position
-            #grasps[0].grasp_pose.pose.position.x = 0.8
-            #grasps[0].grasp_pose.pose.position.y = 0
-            #grasps[0].grasp_pose.pose.position.z = 0.26 + 0.23
-
-
+            grasps[0].grasp_pose.pose.position.z += 0.2  # this will make tip of gripper align with position
             q = tf.transformations.quaternion_from_euler(0, 1.57, -grasp.graspOutput.roll)
-            #q = tf.transformations.quaternion_from_euler(-0.011, 1.57, 0.037)
             grasps[0].grasp_pose.pose.orientation = Quaternion(*q)
             print( "hey")
             print( grasps[0].grasp_pose.pose)
@@ -403,28 +438,29 @@ class Manipulator:
 
         # define the pre-grasp posture, this defines the trajectory position of the joints in the end effector group before we go in for the grasp
         # WE WANT TO OPEN THE GRIPPER, YOU CAN TAKE SOME OF THIS AND MAKE INTO CLOSE GRIPPER FUNCTION
-        pre_grasp_posture = JointTrajectory()
-        pre_grasp_posture.header.frame_id = "arm_tool_link"
-        pre_grasp_posture.joint_names = ["gripper_left_finger_joint", "gripper_right_finger_joint"]
-        jtpoint = JointTrajectoryPoint()
-        jtpoint.positions = [0.04, 0.04]
-        jtpoint.time_from_start = rospy.Duration(2.0)
-        pre_grasp_posture.points.append(jtpoint)
-        grasps[0].pre_grasp_posture = pre_grasp_posture
+        #pre_grasp_posture = JointTrajectory()
+        #pre_grasp_posture.header.frame_id = "arm_tool_link"
+        #pre_grasp_posture.joint_names = ["gripper_left_finger_joint", "gripper_right_finger_joint"]
+        #jtpoint = JointTrajectoryPoint()
+        #jtpoint.positions = [0.04, 0.04]
+        #jtpoint.time_from_start = rospy.Duration(2.0)
+        #pre_grasp_posture.points.append(jtpoint)
+        #grasps[0].pre_grasp_posture = pre_grasp_posture
+        self.open_pre_grasp(grasps[0])
 
         # set the grasp posture, this defines the trajectory position of the joints in the end effector group for grasping the object
         # WE WANT TO CLOSE THE GRIPPER
-        grasp_posture = copy.deepcopy(pre_grasp_posture)
-        grasp_posture.points[0].time_from_start = rospy.Duration(2.0 + 1.0)
-        jtpoint2 = JointTrajectoryPoint()
-        finger_dist = 0.0002  # goal joint tolerance is 0.0001
-        print( "finger dist = ", str(finger_dist))
-        jtpoint2.positions = [finger_dist, finger_dist]
-        jtpoint2.time_from_start = rospy.Duration(2.0 + 1.0 + 3.0)
-        #jtpoint2.effort.append(-14.0)
-        #jtpoint2.effort.append(-14.0)
-        grasp_posture.points.append(jtpoint2)
-        grasps[0].grasp_posture = grasp_posture
+        #grasp_posture = copy.deepcopy(pre_grasp_posture)
+        #grasp_posture.points[0].time_from_start = rospy.Duration(2.0 + 1.0)
+        #jtpoint2 = JointTrajectoryPoint()
+        #finger_dist = 0.0002  # goal joint tolerance is 0.0001
+        #print( "finger dist = ", str(finger_dist))
+        #jtpoint2.positions = [finger_dist, finger_dist]
+        #jtpoint2.time_from_start = rospy.Duration(2.0 + 1.0 + 3.0)
+        #grasp_posture.points.append(jtpoint2)
+        #grasps[0].grasp_posture = grasp_posture
+        self.close_grasp_posture(grasps[0])
+
 
         # set the post-grasp retreat, this is used to define the direction in which to move once the object is grasped and the distance to travel.
         grasps[0].post_grasp_retreat.direction.header.frame_id = "base_footprint"
@@ -434,9 +470,6 @@ class Manipulator:
         grasps[0].post_grasp_retreat.desired_distance = 0.25
         grasps[0].post_grasp_retreat.min_distance = 0.01
 
-        # links_to_allow_contact: ["gripper_left_finger_link", "gripper_right_finger_link", "gripper_link"]
-        #grasps[0].allowed_touch_objects = ['<octomap>', 'object']  # THIS LEFT EMPTY ON THINGY
-        #grasps[0].links_to_allow_contact = ["gripper_left_finger_link", "gripper_right_finger_link", "gripper_link"]
         #Don't restrict contact force
         grasps[0].max_contact_force = 0.0
         print( "max contact force", grasps[0].max_contact_force)
@@ -448,13 +481,16 @@ class Manipulator:
 
 
         # pick the object
-        self.arm_torso.pick("object_to_pick", grasps)
+        #self.arm_torso.pick("object_to_pick", grasps)  JASON PUT ME BACK
+        self.arm_torso.pick("object_to_pick", [self.get_drawer_grasp(pose_est)])
         print(self.arm_torso.get_current_joint_values())
 
         self.scene.remove_world_object("table")
 
-
-        self.scene.attach_box("arm_tool_link", "object_to_pick", touch_links=self.robot.get_link_names(group="gripper"))  # attach object manually in case goal tolerance violated
+        if use_mesh:
+            self.scene.attach_mesh("arm_tool_link", "object_to_pick", touch_links=self.robot.get_link_names(group="gripper"))  # attach object manually in case goal tolerance violated
+        else:
+            self.scene.attach_box("arm_tool_link", "object_to_pick", touch_links=self.robot.get_link_names(group="gripper"))  # attach object manually in case goal tolerance violated
         ##self.scene.remove_world_object("object")
 
         self.lift_torso()  ## SHOULD PROBS RAISE ARM COZ WHAT IF ALREADY LIFTED?
@@ -465,6 +501,34 @@ class Manipulator:
         #roscpp_shutdown()# for moveit stuff
 
         return True # MAYBE CHECK IF ACUTALLY PICKED BY LOOKING AT IF GRIPPER IS CLOSED (if not closed and exerting effort then succesful, sub to /joint_states)
+
+
+    # make gripper open during pre grasp stage
+    def open_pre_grasp(self, grasp):
+        pre_grasp_posture = JointTrajectory()
+        pre_grasp_posture.header.frame_id = "arm_tool_link"
+        pre_grasp_posture.joint_names = ["gripper_left_finger_joint", "gripper_right_finger_joint"]
+        jtpoint = JointTrajectoryPoint()
+        jtpoint.positions = [0.04, 0.04]
+        jtpoint.time_from_start = rospy.Duration(2.0)
+        pre_grasp_posture.points.append(jtpoint)
+        grasp.pre_grasp_posture = pre_grasp_posture
+
+
+    # make gripper close during grasping stage
+    def close_grasp_posture(self, grasp):
+        ##grasp_posture = copy.deepcopy(pre_grasp_posture)
+        grasp_posture = JointTrajectory()
+        grasp_posture.header.frame_id = "arm_tool_link"
+        grasp_posture.joint_names = ["gripper_left_finger_joint", "gripper_right_finger_joint"]
+        #grasp_posture.points[0].time_from_start = rospy.Duration(2.0 + 1.0)
+        jtpoint = JointTrajectoryPoint()
+        finger_dist = 0.0002  # goal joint tolerance is 0.0001
+        print( "finger dist = ", str(finger_dist))
+        jtpoint.positions = [finger_dist, finger_dist]
+        jtpoint.time_from_start = rospy.Duration(2.0 + 1.0 + 3.0)
+        grasp_posture.points.append(jtpoint)
+        grasp.grasp_posture = grasp_posture
 
 
     def place(self):
@@ -569,6 +633,114 @@ class Manipulator:
         # client.get_state()??
         print(grasp)
         return grasp
+
+
+    # delete me this is jsut a test
+    def get_drawer_grasp(self, pose):
+        grasp = Grasp()
+        grasp.grasp_pose.header.frame_id = "base_footprint"
+        grasp.grasp_pose.pose = pose
+        grasp.grasp_pose.pose.position.x -= 0.23  # this will make tip of gripper align with position
+
+
+        ## COULD USE HAF GRASP ON THE HANDLE TO ACCOUNT FOR POSE ESTIMATION ERROR, but first see if there is big error when using full pointcloud
+
+        #q = tf.transformations.quaternion_from_euler(0, 1.57, -grasp.graspOutput.roll)
+        #grasp.grasp_pose.pose.orientation = Quaternion(*q)
+
+        grasp.pre_grasp_approach.direction.header.frame_id = "base_footprint"
+        grasp.pre_grasp_approach.direction.vector.x = 1.0
+        grasp.pre_grasp_approach.direction.vector.y = 0.0
+        grasp.pre_grasp_approach.direction.vector.z = 0.0
+        grasp.pre_grasp_approach.min_distance = 0.05#0.1
+        grasp.pre_grasp_approach.desired_distance = 0.5
+
+        self.open_pre_grasp(grasp)
+        self.close_grasp_posture(grasp)
+
+        grasp.post_grasp_retreat.direction.header.frame_id = "base_footprint"
+        grasp.post_grasp_retreat.direction.vector.x = -1.0
+        grasp.post_grasp_retreat.direction.vector.y = 0.0
+        grasp.post_grasp_retreat.direction.vector.z = 0.0
+        grasp.post_grasp_retreat.desired_distance = 0.5
+        grasp.post_grasp_retreat.min_distance = 0.1
+
+
+        #Don't restrict contact force
+        grasp.max_contact_force = 0.0
+
+        return grasp
+
+
+
+    # IDK IF THIS CLASS IS THE BEST PLACE TO PUT THIS
+    def get_pose_estimate(self, cluster, label):
+
+        rospy.loginfo("trying to find pose estimate for " + label)
+        ## BETTER TO PULL THESE FROM FILE IF POSSIBLE
+        ## you may be able to create another file like coco.names and load it instead when using yolo, up to you !!!!!
+        ## mappings can include things it commonly gets mistaken for, that way it may corect it and return corrected label
+        ##round_objects = ["013_apple","017_orange","053_mini_soccer_ball","054_softball", "055_baseball", "056_tennis_ball", "057_racquetball", "058_golf_ball"]
+        yolo_to_ycb_names = {
+            "apple": ["013_apple"],
+            "banana" : ["011_banana"],
+            "orange": ["017_orange"],
+            "fork" : ["030_fork"],
+            "knife": ["032_knife"],
+            "spoon": ["031_spoon"],
+            "bowl": ["024_bowl"],
+            "cup":["025_mug"],
+            "donut": [],
+            "sports ball": ["053_mini_soccer_ball", "054_softball", "055_baseball", "056_tennis_ball", "057_racquetball", "058_golf_ball"],
+            "scissors":[],
+            "drawer":["drawer"]  ## DELETE ME THIS JUST A TEST
+        }
+
+        if label not in yolo_to_ycb_names or len(yolo_to_ycb_names[label]) == 0:
+            rospy.loginfo("cannot find pose estimate for an unknown object")
+            # PUT THE RETURN NONE BACK AND REMOVE FOLLOWING LINE, THIS IS JUST FOR TESTING
+            label = "drawer"
+            #return None
+
+
+        print("hey 415")
+        file_name = None
+        from geometry_msgs.msg import Pose
+        pose = Pose()
+        # call PoseEst service to estimate pose
+        rospy.wait_for_service('/get_pose_estimate')
+        try:
+            print("hey 931")
+            get_pose_est_service = rospy.ServiceProxy('/get_pose_estimate', GetPoseEst)
+            print("hey 852")
+            from std_msgs.msg import String
+            # JASON: CHANGE ME BACK TO CLUSTER.POINTCLOUD
+
+            # get full point cloud
+            pc = rospy.wait_for_message("/xtion/depth_registered/points", PointCloud2)
+            # but full pointcloud is in xtion_rgb_optical_frame frame, need to convert to base frame
+            get_pose_est_response = get_pose_est_service(pc, [String(s) for s in yolo_to_ycb_names[label]])
+            file_name = yolo_to_ycb_names[label][get_pose_est_response.index]
+
+            # convert from transform msg to pose msg
+            pose.position.x = get_pose_est_response.estimated_transform.translation.x
+            pose.position.y = get_pose_est_response.estimated_transform.translation.y
+            pose.position.z = get_pose_est_response.estimated_transform.translation.z
+            pose.orientation = get_pose_est_response.estimated_transform.rotation
+
+            print("hey 825")
+            print(get_pose_est_response)
+        except rospy.ServiceException as e:
+            print("GetClusters service call failed: %s"%e)
+
+
+
+
+
+        rospy.loginfo("done trying to find pose estimate")
+        return pose, file_name
+        #return get_clusters_response.clusters
+
 
     def unfold_arm(self):
         rospy.loginfo("unfolding arm")
@@ -747,16 +919,16 @@ class Cleanup:
 
 
                 ## start pose estimate
-                print("length of data BEFORE: ", len(clusters[closest_cluster_index].pointcloud.data))
-                self.get_pose_estimate(clusters[closest_cluster_index], label)
-                print("length of data after SHOULD BE SAME AS BEFORE: ", len(clusters[closest_cluster_index].pointcloud.data))
+                #print("length of data BEFORE: ", len(clusters[closest_cluster_index].pointcloud.data))
+                #self.get_pose_estimate(clusters[closest_cluster_index], label)
+                #print("length of data after SHOULD BE SAME AS BEFORE: ", len(clusters[closest_cluster_index].pointcloud.data))
 
                 ## end pose est
 
 
                 print("picking object called " + label)
                 self.manipulator.clear_scene()
-                pick_success = self.manipulator.pick(clusters[closest_cluster_index])
+                pick_success = self.manipulator.pick(clusters[closest_cluster_index], label)
 
                 destination = self.object_destinations[label]
                 self.manipulation_areas[destination].go(False)
@@ -803,49 +975,6 @@ class Cleanup:
         return i
 
 
-    # IDK IF THIS CLASS IS THE BEST PLACE TO PUT THIS
-    def get_pose_estimate(self, cluster, label):
-
-        rospy.loginfo("trying to find pose estimate for " + label)
-        ## BETTER TO PULL THESE FROM FILE IF POSSIBLE
-        ## you may be able to create another file like coco.names and load it instead when using yolo, up to you !!!!!
-        ## mappings can include things it commonly gets mistaken for, that way it may corect it and return corrected label
-        ##round_objects = ["013_apple","017_orange","053_mini_soccer_ball","054_softball", "055_baseball", "056_tennis_ball", "057_racquetball", "058_golf_ball"]
-        yolo_to_ycb_names = {
-            "apple": ["013_apple"],
-            "banana" : ["011_banana"],
-            "orange": ["017_orange"],
-            "fork" : ["030_fork"],
-            "knife": ["032_knife"],
-            "spoon": ["031_spoon"],
-            "bowl": ["024_bowl"],
-            "cup":["025_mug"],
-            "donut": [],
-            "sports ball": ["053_mini_soccer_ball", "054_softball", "055_baseball", "056_tennis_ball", "057_racquetball", "058_golf_ball"],
-            "scissors":[]
-        }
-
-        if label not in yolo_to_ycb_names or len(yolo_to_ycb_names[label]) == 0:
-            return None
-
-
-        print("hey 415")
-        # call PoseEst service to estimate pose
-        rospy.wait_for_service('/get_pose_estimate')
-        try:
-            print("hey 931")
-            get_pose_est_service = rospy.ServiceProxy('/get_pose_estimate', GetPoseEst)
-            print("hey 852")
-            from std_msgs.msg import String
-            get_pose_est_response = get_pose_est_service(cluster.pointcloud, [String(s) for s in yolo_to_ycb_names[label]])
-            print("hey 825")
-            print(get_pose_est_response)
-        except rospy.ServiceException as e:
-            print("GetClusters service call failed: %s"%e)
-
-
-        rospy.loginfo("done trying to find pose estimate")
-        #return get_clusters_response.clusters
 
 
 

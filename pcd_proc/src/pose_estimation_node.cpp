@@ -34,6 +34,12 @@
 #include <tf_conversions/tf_eigen.h>
 #include <eigen_conversions/eigen_msg.h>
 
+#include "pcl_ros/transforms.h"
+/*
+#include <tf/transform_datatypes.h>
+#include <tf/transform_listener.h>
+#include <tf/transform_broadcaster.h>
+*/
 
 
 class FeatureCloud
@@ -251,12 +257,13 @@ public:
     nh_ = nh;
     ROS_INFO("Pose estimator service running");
 
+    nh.getParam("pose_estimation_node/robot_base_frame", robotBaseFrame);
     //nh.getParam("pcd_processing_node/cloud_topic1", cloud_topic1);
     //if (!nh.getParam("stuff", data_)) throw std::runtime_error("Must provide parameter 'stuff'");
 
     // Create a ROS publisher for the output point cloud
     pub = nh.advertise<sensor_msgs::PointCloud2> ("pose_est_output", 1, true);
-    objectLibraryPath_ = ros::package::getPath("pcd_proc") + "/data/object_library/";
+    objectLibraryPath = ros::package::getPath("pcd_proc") + "/data/object_library/";
     // Create ROS interfaces
     server_ = nh.advertiseService("get_pose_estimate", &PoseEstimator::getPoseEstimate, this);
 
@@ -269,7 +276,7 @@ public:
 
 
     std::cout << "wazzup kid" << std::endl;
-    std::cout << objectLibraryPath_ << std::endl;
+    std::cout << objectLibraryPath << std::endl;
 
 
     std::vector<FeatureCloud> objectTemplates;
@@ -278,15 +285,30 @@ public:
     for(auto templateName : req.file_names)
     {
       FeatureCloud template_cloud;
-      template_cloud.loadInputCloud (objectLibraryPath_ + templateName.data + ".pcd");
-      std::cout << "HEY THERE I loaded" << objectLibraryPath_ + templateName.data + ".pcd" << std::endl;
+      template_cloud.loadInputCloud (objectLibraryPath + templateName.data + ".pcd");
+      std::cout << "HEY THERE I loaded" << objectLibraryPath + templateName.data + ".pcd" << std::endl;
       objectTemplates.push_back (template_cloud);
 
     }
 
+    // transform from camera frame (or whatevere frame it is in) to base_footprint
+    tf::TransformListener listener;
+    tf::StampedTransform stransform;
+    try
+    {
+      listener.waitForTransform(robotBaseFrame, req.detected_object.header.frame_id, ros::Time::now(), ros::Duration(6.0));
+      listener.lookupTransform(robotBaseFrame, req.detected_object.header.frame_id, ros::Time(0), stransform);
+    }
+    catch (tf::TransformException ex)
+    {
+      ROS_ERROR("%s", ex.what());
+    }
+    sensor_msgs::PointCloud2 transformedRoscloud;
+    pcl_ros::transformPointCloud(robotBaseFrame, stransform, req.detected_object, transformedRoscloud);
+
     // Convert target PointCloud to pcl PointCloud
     pcl::PointCloud<pcl::PointXYZ> cloud;
-    pcl::fromROSMsg(req.detected_object, cloud);
+    pcl::fromROSMsg(transformedRoscloud, cloud);
     // input cloud must be a pointer, so we make a new cloudPtr from the cloud object
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloudPtr(new pcl::PointCloud<pcl::PointXYZ>(cloud));
     ROS_INFO_STREAM("Detected object cloud has " << cloudPtr->size() << " points");
@@ -358,12 +380,25 @@ public:
       output.header.frame_id = "base_footprint";
 
 
+/*
       Eigen::Matrix4d md(bestAlignment.final_transformation.cast<double>());
       Eigen::Affine3d affine(md);
       tf::poseEigenToMsg(affine, res.estimated_pose);
       res.transformed_cloud = output;
       res.index = bestIndex;
       res.fitness_score = bestAlignment.fitness_score;
+*/
+    Eigen::Matrix4d md(bestAlignment.final_transformation.cast<double>());
+    Eigen::Affine3d affine(md);
+    tf::transformEigenToMsg(affine, res.estimated_transform);
+    res.transformed_cloud = output;
+    res.index = bestIndex;
+    res.fitness_score = bestAlignment.fitness_score;
+
+      // send the pose estimation transform (for visualisation and interaction purposes, i.e pulling drawers open/closed)
+      //tf::Transform objectTransformFromBase;
+      //tf::poseEigenToMsg(affine, objectTransformFromBase);
+      //transformBroadcaster_.sendTransform(tf::StampedTransform(objectTransformFromBase, ros::Time::now(), "base_footprint", "estimated pose"));
 
     // Publish the data.
     pub.publish (output);
@@ -376,8 +411,11 @@ public:
     ros::ServiceServer server_;
     //ros::Publisher croppedPub_, objectPub_, clusterPub_, planePub_, nonPlanePub_;
     ros::NodeHandle nh_;
-    //tf::TransformBroadcaster br_;
-    std::string objectLibraryPath_;
+    //tf::TransformBroadcaster transformBroadcaster_;
+
+
+
+    std::string objectLibraryPath, robotBaseFrame;
 
     // Configuration data
     ros::Publisher pub;

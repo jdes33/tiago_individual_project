@@ -1,7 +1,7 @@
 #include <ros/ros.h>
-#include <tf/transform_datatypes.h>
-#include <tf/transform_listener.h>
-#include <tf/transform_broadcaster.h>
+//#include <tf/transform_datatypes.h>
+//#include <tf/transform_listener.h>
+//#include <tf/transform_broadcaster.h>
 #include <sensor_msgs/PointCloud2.h>
 
 // PCL specific includes
@@ -49,7 +49,7 @@ public:
     ROS_INFO("Perception service running");
 
     nh.getParam("pcd_processing_node/cloud_topic", cloudTopic);
-    nh.getParam("pcd_processing_node/world_frame", worldFrame);
+    nh.getParam("pcd_processing_node/robot_base_frame", robotBaseFrame);
     ///nh.getParam("pcd_processing_node/camera_frame", camera_frame); NO  LONGER USED
     nh.getParam("pcd_processing_node/voxel_leaf_size", voxel_leaf_size);
     nh.getParam("pcd_processing_node/x_filter_min", x_filter_min);
@@ -113,15 +113,15 @@ public:
     tf::StampedTransform stransform;
     try
     {
-      listener.waitForTransform(worldFrame, rosCloud->header.frame_id, ros::Time::now(), ros::Duration(6.0));
-      listener.lookupTransform(worldFrame, rosCloud->header.frame_id, ros::Time(0), stransform);
+      listener.waitForTransform(robotBaseFrame, rosCloud->header.frame_id, ros::Time::now(), ros::Duration(6.0));
+      listener.lookupTransform(robotBaseFrame, rosCloud->header.frame_id, ros::Time(0), stransform);
     }
     catch (tf::TransformException ex)
     {
       ROS_ERROR("%s", ex.what());
     }
     sensor_msgs::PointCloud2 transformedRoscloud;
-    pcl_ros::transformPointCloud(worldFrame, stransform, *rosCloud, transformedRoscloud);
+    pcl_ros::transformPointCloud(robotBaseFrame, stransform, *rosCloud, transformedRoscloud);
 
     // convert from ros PointCloud to pcl PointCloud
     pcl::PointCloud<pcl::PointXYZ> cloud;
@@ -158,7 +158,7 @@ public:
     for(pcl::PointCloud<pcl::PointXYZ>::Ptr pclCluster : pclClusters){
       pcd_proc::Cluster cluster;
       pcl::toROSMsg(*pclCluster, cluster.pointcloud);
-      cluster.pointcloud.header.frame_id = worldFrame;
+      cluster.pointcloud.header.frame_id = robotBaseFrame;
       cluster.pointcloud.header.stamp = ros::Time::now();
       clusterPub_.publish(cluster.pointcloud);
       // MIGHT GOTTA COMBINE THSES TWO INTO ONE FUNCTION LATER
@@ -200,7 +200,7 @@ public:
       sensor_msgs::PointCloud2::Ptr cropped(new sensor_msgs::PointCloud2);
       pcl::toROSMsg(*cloudPtr, *cropped);
       //    pcl::toROSMsg(xyz_filtered_cloud, *cropped);
-      cropped->header.frame_id = worldFrame;
+      cropped->header.frame_id = robotBaseFrame;
       cropped->header.stamp = ros::Time::now();
       croppedPub_.publish(*cropped);
     }
@@ -418,10 +418,9 @@ private:
   ros::ServiceServer server_;
   ros::Publisher croppedPub_, objectPub_, clusterPub_, planePub_, nonPlanePub_;
   ros::NodeHandle nh_;
-  tf::TransformBroadcaster br_;
 
   // Configuration data
-  std::string cloudTopic, worldFrame;
+  std::string cloudTopic, robotBaseFrame;
   double voxel_leaf_size;
   double x_filter_min, x_filter_max, y_filter_min, y_filter_max, z_filter_min, z_filter_max, planeFilterMaxZ;
   double plane_max_iter, plane_dist_thresh;
