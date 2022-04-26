@@ -370,7 +370,7 @@ class Manipulator:
 
 
 
-    def pick(self, cluster, label, clusters):
+    def pick(self, cluster, label):
 
         self.clear_scene()
         self.lower_head()
@@ -397,21 +397,6 @@ class Manipulator:
             p.pose.position.y = cluster.min_pt.y + ((cluster.max_pt.y - cluster.min_pt.y) / 2.0)
             p.pose.position.z =  cluster.min_pt.z + ((cluster.max_pt.z - cluster.min_pt.z) / 2.0)#cluster.target_pose.position.z / 2.0# resp1.min_pt.z + height / 2.0#
             self.scene.add_box("object_to_pick", p, ((cluster.max_pt.x - cluster.min_pt.x)+0.025, (cluster.max_pt.y - cluster.min_pt.y)+0.025, 2*(cluster.max_pt.z - cluster.min_pt.z)))#resp1.target_pose.position.z))
-
-
-        ## create MESH
-        for i in range(len(clusters)):
-            # tbh octomap is kinda safer
-
-            cloud_points = list(point_cloud2.read_points(clusters[i].pointcloud, skip_nans=True, field_names = ("x", "y", "z")))
-            ctr = 0
-            size = 0.005
-            for point in cloud_points:
-                p.pose.position.x = point[0]
-                p.pose.position.y = point[1]
-                p.pose.position.z =  self.plane_max_pt.z + ((point[2] - self.plane_max_pt.z) / 2.0)
-                self.scene.add_box(str(i) + "-" + str(ctr), p, (size, size, (point[2] - self.plane_max_pt.z)))#resp1.target_pose.position.z)
-                ctr += 1
 
         # add table
         p.pose.orientation = Quaternion(0,0,0,1)
@@ -507,6 +492,8 @@ class Manipulator:
         from sensor_msgs.msg import JointState
         joint_info = rospy.wait_for_message("/joint_states", JointState)
         rospy.loginfo(joint_info.effort[joint_info.name.index("gripper_left_finger_joint")])
+        rospy.loginfo(joint_info.effort[joint_info.name.index("gripper_right_finger_joint")])
+
         if joint_info.effort[joint_info.name.index("gripper_left_finger_joint")] <= -15 and joint_info.effort[joint_info.name.index("gripper_right_finger_joint")] <= -15:
             rospy.loginfo("OBJECT SUCCESSFULLY GRASPED")
         else:
@@ -548,7 +535,109 @@ class Manipulator:
         grasp.grasp_posture = grasp_posture
 
 
-    def place(self):
+
+    def place(self, obstacle_clusters):
+
+        self.prepare_robot()
+        self.lift_torso()
+
+        # THIS PROBS WON'T WORK FOR MESH, SO MAYBE JUST DON'T USE MESH FOR ALL ITEMS EXCEPT CUTLERY
+        # THE ITEMS THAT USE MESH WILL BE DIFF AS THEY NEED REORIENTATION AND NEED TO BE PLACED IN CONTAINER, SO MAKE ENTIRELY DIFFERENT FUNCTINO IF YOU WANT
+        # places on a flat surface
+        # MAYBE COULD ALSO CREATE A PLACE_CONTAINER function, that gets the cluster and places in center of it
+
+        place_locations = []
+        resolution = 10.0  # 10cm
+        place_height_padding = 0.01  # the height the bottom of object should be above plane before being released from gripper
+        ## get height from attached object
+        l, w, h = self.scene.get_attached_objects()["object_to_pick"].object.primitives[0].dimensions
+
+
+        padding = max(0.1, max(l, w))  # ensure object is at least 10cm from edge of table
+        start_x = self.plane_min_pt.x + padding
+        end_x = self.plane_max_pt.x - padding
+        start_y = self.plane_min_pt.y + padding
+        end_y = self.plane_max_pt.y - padding
+        # this is the distance from the arm tool link to the base of the object
+        # the get_attached_objects function returns information about the attached object in the the arm_tool_link frame
+        # the x axis of the tool_link frame is aligned with the gripper
+        link_object_bottom_dist = self.scene.get_attached_objects()["object_to_pick"].object.primitive_poses[0].position.x + (h / 2.0)
+
+        print(self.scene.get_attached_objects()["object_to_pick"].object.primitive_poses[0].position)
+        rospy.loginfo("object lwh: " + str(l) + " " + str(w) + " " + str(h))
+        rospy.loginfo("distance from arm tool link to base of object" + str(link_object_bottom_dist))
+
+        rospy.loginfo("")
+        z = self.plane_max_pt.z + link_object_bottom_dist + place_height_padding
+        resolution = 0.1  # 10cm
+
+        current_x = start_x
+        while current_x <= end_x:
+            current_y = start_y
+            while current_y <= end_y:
+                place_locations.append(self.create_place_location(current_x, current_y, z))
+                current_y += resolution
+            current_x += resolution
+
+
+
+        rospy.loginfo("Placing object")
+        self.arm_torso.set_planning_time(10)
+        self.arm_torso.place("object_to_pick", place_locations)
+        rospy.loginfo("Done placing")
+        self.home_position()
+        self.clear_scene()
+
+    def create_place_location(self, x, y, z):
+        # creates a top down release place location
+        rospy.loginfo("Generating place location")
+
+        place_location = PlaceLocation()
+        # set place location pose
+        place_location.place_pose = PoseStamped()
+        place_location.place_pose.header.frame_id = "base_footprint"
+        #q = tf.transformations.quaternion_from_euler(0, 1.57, 0)
+        place_location.place_pose.pose.position.x = x
+        place_location.place_pose.pose.position.y = y
+        place_location.place_pose.pose.position.z = z
+        place_location.place_pose.pose.orientation.w = 1
+
+        rospy.loginfo("x: " + str(x) + "  y: " + str(y) + "  z: " + str(z))
+
+        # set pre place approach
+        place_location.pre_place_approach.direction.header.frame_id = "base_footprint"
+        # set direction to negative z axis (move arm down)
+        place_location.pre_place_approach.direction.vector.z = -1.0
+        place_location.pre_place_approach.min_distance = 0.0000095
+        place_location.pre_place_approach.desired_distance = 0.115
+
+        # set post grasp retreat
+        place_location.post_place_retreat.direction.header.frame_id = "base_footprint"
+        # set direction to oositive z axis (move arm up)
+        place_location.post_place_retreat.direction.vector.z = 1.0
+        place_location.post_place_retreat.min_distance = 0.00001
+        place_location.post_place_retreat.desired_distance = 0.25
+
+        # set posture of eef after placing object (open gripper)
+        post_place_posture = JointTrajectory()
+        post_place_posture.header.frame_id = "arm_tool_link"
+        post_place_posture.joint_names = ["gripper_left_finger_joint", "gripper_right_finger_joint"]
+        jtpoint = JointTrajectoryPoint()
+        jtpoint.positions = [0.04, 0.04]
+        jtpoint.time_from_start = rospy.Duration(2.0)
+        post_place_posture.points.append(jtpoint)
+        place_location.post_place_posture = post_place_posture
+
+        return place_location
+
+
+
+
+
+
+
+
+    def place_bin(self):  # COULD USE THIS TO PLACE IN BIN MANYALLY
 
         ##self.clear_octomap_srv.call(EmptyRequest())
         #self.unfold_arm()
@@ -575,14 +664,14 @@ class Manipulator:
         # set direction to negative z axis (move arm down)
         place_location.pre_place_approach.direction.vector.z = -1.0
         place_location.pre_place_approach.min_distance = 0.0000095
-        place_location.pre_place_approach.desired_distance = 0.115
+        place_location.pre_place_approach.desired_distance = 0.01
 
         # set post grasp retreat
         place_location.post_place_retreat.direction.header.frame_id = "base_footprint"
         # set direction to oositive z axis (move arm up)
         place_location.post_place_retreat.direction.vector.z = 1.0
         place_location.post_place_retreat.min_distance = 0.00001
-        place_location.post_place_retreat.desired_distance = 0.25
+        place_location.post_place_retreat.desired_distance = 0.2
 
         # set posture of eef after placing object (open gripper)
         post_place_posture = JointTrajectory()
@@ -948,12 +1037,13 @@ class Cleanup:
                 print("picking object called " + label)
                 self.manipulator.clear_scene()
                 print("picking cluster number " + str(closest_cluster_index))
-                pick_success = self.manipulator.pick(clusters[closest_cluster_index], label, clusters)
+                pick_success = self.manipulator.pick(clusters[closest_cluster_index], label)
                 if pick_success:
                     destination = self.object_destinations[label]
                     self.manipulation_areas[destination].go(False)
+                    place_area_clusters = self.get_clusters()
                     print("placing object called " + label)
-                    self.manipulator.place()
+                    self.manipulator.place(place_area_clusters)
                 else:
                     rospy.logwarn("Unable to pick from this area. Skipping this area.")
                     break
@@ -991,7 +1081,7 @@ class Cleanup:
 
         print("picked cluster " + str(closest_idx))
 
-        return i
+        return closest_idx
 
 
 
@@ -1004,7 +1094,7 @@ if __name__ == '__main__':
 
     # ROSTOPIC ECHO /AMCL_POSE TO GET POSES
     manipulation_areas = [
-        ManipulationArea("back_room", (-2.86942732871, -0.219775309016), (0.0, 0.0, -0.997891458136, 0.0649048363319)),
+        ManipulationArea("back_room", (-3, 0), (0.0, 0.0, -0.997891458136, 0.0649048363319)),
         ManipulationArea("table1", (2, 0), (0.0, 0.0, 0.0, 1.0)),
     ]
     pickup_areas = [1]
