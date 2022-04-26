@@ -24,6 +24,9 @@
       <arg name="rviz" value="false"/>
   </include>
 
+  <!-- Load definition of pregrasp motion into play_motion namespace -->
+  <rosparam command="load" file="$(find tiago_pick_demo)/config/pick_motions.yaml" />
+
 
   <!-- Republish topics data -->
   <node pkg="topic_tools" type="relay" name="relay_scan" args="/scan_raw /scan" />
