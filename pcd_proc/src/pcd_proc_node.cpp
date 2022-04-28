@@ -66,11 +66,6 @@ public:
     nh.getParam("pcd_processing_node/cluster_max_size", cluster_max_size);
     nh.getParam("cloud_debug", debug_);
 
-    // TODO (for SwRI. Not for the student) Add check parameters
-    //    if (!nh.getParam("stuff", data_)) throw std::runtime_error("Must provide parameter 'stuff'");
-
-    // Create ROS interfaces
-    //server_ = nh.advertiseService("find_pick", &PointCloudProcessor::findPickPose, this);
     server_ = nh.advertiseService("get_clusters", &PointCloudProcessor::getObjectClusters, this);
 
     if (debug_)

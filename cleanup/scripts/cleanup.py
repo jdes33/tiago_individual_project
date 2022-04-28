@@ -36,15 +36,6 @@ class ManipulationArea:
 
         self.clear_octomap_srv = rospy.ServiceProxy('/clear_octomap', Empty)
 
-
-        ### another option for orientation:
-        #quaternionArray = tf.transformations.quaternion_about_axis(theta, (0,0,1))
-		# quaternion_about_axis offers a convenient way for calculating the members of a quaternion.
-		# In order to use it we need to convert it to a Quaternion message structure
-		#moveBaseGoal.target_pose.pose.orientation = self.array_to_quaternion(quaternionArray)
-
-        ###self.go()
-
     def go(self, pickup=False):
         if pickup:
             # do pickup pose
@@ -80,6 +71,12 @@ class ManipulationArea:
         jt.points.append(jtp)
         self.head_cmd.publish(jt)
         rospy.loginfo("Done.")
+
+    def get_position(self):
+        return self.goal.target_pose.pose.position
+
+    def get_orientation(self):
+        return self.goal.target_pose.pose.orientation
 
 
 
@@ -196,29 +193,35 @@ class ClusterLabeler:
             for point in cloud_points:
                 pixels.add(self.cam.project3dToPixel((point[0], point[1], point[2])))
 
+            xs = [p[0] for p in pixels]
+            ys = [p[1] for p in pixels]
+            pixel_x_min = min(xs)
+            pixel_y_min = min(ys)
+            pixel_x_max = max(xs)
+            pixel_y_max = max(ys)
 
             # go through each yolo and find the one with max overlay
-            max_percentage_filled = 0
-            max_label = "unknown"
-            # MAYBE ADD A THRESHOLD TOO? i.e percentage of points in detection box
+            min_error = 50  # acts as threshold
+            best_label = "unknown"
             for detection in detections:
-                current_overlap = 0
-                for pixel in pixels:
-                    if pixel[0] >= detection.x and pixel[0] <= detection.x + detection.width and pixel[1] >= detection.y and pixel[1] < detection.y + detection.height:
-                        current_overlap += 1
 
-                percentage_filled = (1.0 * current_overlap) / (detection.width * detection.height)
-                if percentage_filled > max_percentage_filled:
-                    max_percentage_filled = percentage_filled
-                    max_label = detection.label
-            print(max_label, " picked as fill: ", max_percentage_filled)
+                min_x_diff = abs(detection.x - pixel_x_min)
+                min_y_diff = abs(detection.y - pixel_y_min)
+                max_x_diff = abs(detection.x + detection.width - pixel_x_max)
+                max_y_diff = abs(detection.y + detection.height - pixel_y_max)
+
+                error = min_x_diff + min_y_diff + max_x_diff + max_y_diff
+
+                if error < min_error:
+                    min_error = error
+                    best_label = detection.label
+
+            rospy.loginfo(best_label +  " picked as error: " + str(min_error))
 
 
             #cloud_points_base_frame = list(point_cloud2.read_points(cluster.pointcloud, skip_nans=True, field_names = ("x", "y", "z")))
-            text_marker_data.append([max_label, cluster.top_center_pose.position.x, cluster.top_center_pose.position.y, cluster.max_pt.z + 0.1])
+            text_marker_data.append([best_label, cluster.top_center_pose.position.x, cluster.top_center_pose.position.y, cluster.max_pt.z + 0.1])
 
-
-        ## IF YOU PREFER MAYBE MAKE MARKER CLASS LIKE THE CONSTRUCT, BUT I THINK THIS IS OKAY
         self.publish_text_markers(text_marker_data, 10)  # display text markers above each cluster for 10 seconds
         # return list of labels
         return [data[0] for data in text_marker_data]
@@ -298,9 +301,6 @@ class ClusterLabeler:
 
 
 
-
-
-
 # PROBS BETTER TO MAKER THIS ONE A SERVICE/SERVER NO???, LIKE THE TIAGO TUTORIALS, IT WILL STILL BE ABLE TO MAINTIAN STATE
 # NEED TO PASS IN CLUSTER
 # SERVICES AVAILBALE ARE PICK, PLACE
@@ -326,10 +326,6 @@ import sys
 from std_srvs.srv import Empty, EmptyRequest
 ##from geometry_msgs.msg import , Point,Pose, PoseStamped, PoseArray,
 import os
-
-# make global for now
-#plane_max_pt = None
-#plane_min_pt = None
 
 
 # prepare_robot, raise_arm, lift_torso, lower_head are from tiago_tutorials: tiago_pick_demo, pick_client.py
@@ -534,8 +530,6 @@ class Manipulator:
         grasp_posture.points.append(jtpoint)
         grasp.grasp_posture = grasp_posture
 
-
-
     def place(self, obstacle_clusters):
 
         self.prepare_robot()
@@ -547,10 +541,9 @@ class Manipulator:
         # MAYBE COULD ALSO CREATE A PLACE_CONTAINER function, that gets the cluster and places in center of it
 
         place_locations = []
-        resolution = 10.0  # 10cm
-        place_height_padding = 0.01  # the height the bottom of object should be above plane before being released from gripper
         ## get height from attached object
         l, w, h = self.scene.get_attached_objects()["object_to_pick"].object.primitives[0].dimensions
+        rospy.loginfo("object lwh: " + str(l) + " " + str(w) + " " + str(h))
 
 
         padding = max(0.1, max(l, w))  # ensure object is at least 10cm from edge of table
@@ -558,17 +551,10 @@ class Manipulator:
         end_x = self.plane_max_pt.x - padding
         start_y = self.plane_min_pt.y + padding
         end_y = self.plane_max_pt.y - padding
-        # this is the distance from the arm tool link to the base of the object
-        # the get_attached_objects function returns information about the attached object in the the arm_tool_link frame
-        # the x axis of the tool_link frame is aligned with the gripper
-        link_object_bottom_dist = self.scene.get_attached_objects()["object_to_pick"].object.primitive_poses[0].position.x + (h / 2.0)
 
-        print(self.scene.get_attached_objects()["object_to_pick"].object.primitive_poses[0].position)
-        rospy.loginfo("object lwh: " + str(l) + " " + str(w) + " " + str(h))
-        rospy.loginfo("distance from arm tool link to base of object" + str(link_object_bottom_dist))
-
-        rospy.loginfo("")
-        z = self.plane_max_pt.z + link_object_bottom_dist + place_height_padding
+        # unlike picking, while placing it is the exact location of the center of the attached object
+        # the extra 0.1 is to account for octomap
+        z = self.plane_max_pt.z + (h / 2.0) + 0.1
         resolution = 0.1  # 10cm
 
         current_x = start_x
@@ -587,6 +573,7 @@ class Manipulator:
         rospy.loginfo("Done placing")
         self.home_position()
         self.clear_scene()
+
 
     def create_place_location(self, x, y, z):
         # creates a top down release place location
@@ -608,15 +595,15 @@ class Manipulator:
         place_location.pre_place_approach.direction.header.frame_id = "base_footprint"
         # set direction to negative z axis (move arm down)
         place_location.pre_place_approach.direction.vector.z = -1.0
-        place_location.pre_place_approach.min_distance = 0.0000095
-        place_location.pre_place_approach.desired_distance = 0.115
+        place_location.pre_place_approach.min_distance = 0.05
+        place_location.pre_place_approach.desired_distance = 0.1
 
         # set post grasp retreat
         place_location.post_place_retreat.direction.header.frame_id = "base_footprint"
         # set direction to oositive z axis (move arm up)
         place_location.post_place_retreat.direction.vector.z = 1.0
-        place_location.post_place_retreat.min_distance = 0.00001
-        place_location.post_place_retreat.desired_distance = 0.25
+        place_location.post_place_retreat.min_distance = 0.05
+        place_location.post_place_retreat.desired_distance = 0.2
 
         # set posture of eef after placing object (open gripper)
         post_place_posture = JointTrajectory()
@@ -973,7 +960,7 @@ class Cleanup:
 
                 # find which object is closest in x direction (closer to front edge of table)
                 closest_cluster_index = self.get_closest(clusters)
-                if abs(clusters[closest_cluster_index].top_center_pose.position.y) > 0.1:  # if y difference greater than threshold  # COULD CHANGE TO IF XY EUC DIST IS GREATER THAN THRESH
+                if abs(clusters[closest_cluster_index].top_center_pose.position.y) > 0.1:  # if y difference greater than threshold
                     # move to be in front of it and recalculate clusters
                     # we move as reach is circuluar, so it greatest when in front, may also help object detection
                     # we recaculate as amcl has uncertainty (and some object models like banana move by themselves overtime)
@@ -1009,10 +996,11 @@ class Cleanup:
                     goal.target_pose.pose.position.x = target_pt.point.x
                     goal.target_pose.pose.position.y = target_pt.point.y
                     goal.target_pose.pose.position.z = target_pt.point.z
-                    goal.target_pose.pose.orientation.x = 0
-                    goal.target_pose.pose.orientation.y = 0
-                    goal.target_pose.pose.orientation.z = 0
-                    goal.target_pose.pose.orientation.w = 1
+                    goal.target_pose.pose.orientation = manipulation_areas[pickup_index].get_orientation()
+                    #goal.target_pose.pose.orientation.x = 0
+                    #goal.target_pose.pose.orientation.y = 0
+                    #goal.target_pose.pose.orientation.z = 0
+                    #goal.target_pose.pose.orientation.w = 1
                     move_base_client.send_goal(goal)
                     move_base_client.wait_for_result()
                     print("Adjusted robot position")
